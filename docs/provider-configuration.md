@@ -121,9 +121,9 @@ POST {LLM_BASE_URL}/chat/completions
 Authorization: Bearer <LLM_API_KEY>
 ```
 
-请求字段：`model`、`messages`、`temperature` 和 `max_tokens`。响应读取 `choices[0].message.content` 及可选的 token usage。
+请求字段通常为 `model`、`messages`、`temperature` 和 `max_tokens`。响应读取 `choices[0].message.content` 及可选的 token usage。适配器会根据平台与模型能力组装参数；例如 `kimi-k2.6` 的思考模式不接受任意采样温度，因此该模型请求会省略 `temperature`。
 
-部分新模型可能把 `max_tokens` 标记为兼容字段或对采样参数有限制。若平台返回参数错误，应先根据该模型的官方文档选择兼容模型；确有必要时，再新增平台专用适配器，不在通用适配器中堆叠不可验证的条件分支。
+部分新模型可能把 `max_tokens` 标记为兼容字段或对采样参数有限制。已确认的平台差异应通过显式能力配置和契约测试处理；若平台返回新的参数错误，应先根据该模型的官方文档确认约束，再补充对应能力规则或专用适配器。
 
 ### 6.2 火山方舟
 

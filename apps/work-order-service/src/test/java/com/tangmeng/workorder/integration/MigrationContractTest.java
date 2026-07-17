@@ -31,4 +31,3 @@ class MigrationContractTest {
             .contains("ON CONFLICT (work_order_no) DO NOTHING");
     }
 }
-

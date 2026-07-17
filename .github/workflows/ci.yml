@@ -29,6 +29,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check repository whitespace
+        shell: bash
+        run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

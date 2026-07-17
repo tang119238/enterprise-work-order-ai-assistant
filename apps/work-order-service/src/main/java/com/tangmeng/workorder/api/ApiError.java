@@ -8,4 +8,3 @@ public record ApiError(String code, String message, Instant timestamp) {
         return new ApiError(code, message, Instant.now());
     }
 }
-

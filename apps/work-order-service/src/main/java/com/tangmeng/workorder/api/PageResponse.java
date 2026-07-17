@@ -22,4 +22,3 @@ public record PageResponse<T>(
         );
     }
 }
-

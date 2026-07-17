@@ -41,4 +41,3 @@ class WorkOrderPostgresIntegrationTest {
             .containsExactly("WO-20260718-007", "WO-20260718-008");
     }
 }
-

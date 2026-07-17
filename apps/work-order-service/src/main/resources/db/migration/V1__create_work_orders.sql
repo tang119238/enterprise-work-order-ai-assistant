@@ -24,4 +24,3 @@ CREATE INDEX idx_work_order_project ON work_order(project_name);
 CREATE INDEX idx_work_order_assignee ON work_order(assignee_name);
 CREATE INDEX idx_work_order_created_at ON work_order(created_at DESC);
 CREATE INDEX idx_work_order_root ON work_order(root_work_order_no);
-

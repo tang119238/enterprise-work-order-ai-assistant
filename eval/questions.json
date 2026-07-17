@@ -104,8 +104,8 @@
     "message": "WO-20260718-010 的负责人是谁",
     "expected_document_ids": [],
     "expected_tools": ["get_work_order"],
-    "required_facts": ["WO-20260718-010", "URGENT"],
-    "forbidden_facts": ["WO-20991231-999"]
+    "required_facts": ["WO-20260718-010", "许晨"],
+    "forbidden_facts": ["WO-20991231-999", "林晓"]
   },
   {
     "id": "W03",
@@ -122,8 +122,8 @@
     "message": "查询 WO-20260718-050 截止时间",
     "expected_document_ids": [],
     "expected_tools": ["get_work_order"],
-    "required_facts": ["WO-20260718-050", "CLOSED"],
-    "forbidden_facts": ["WO-20991231-999"]
+    "required_facts": ["WO-20260718-050", "2026-07-19T02:40:00"],
+    "forbidden_facts": ["WO-20991231-999", "2026-07-18T02:40:00"]
   },
   {
     "id": "W05",

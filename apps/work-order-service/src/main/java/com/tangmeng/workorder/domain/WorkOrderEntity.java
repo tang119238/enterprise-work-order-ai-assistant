@@ -34,4 +34,3 @@ public class WorkOrderEntity {
     private LocalDateTime dueAt;
     private LocalDateTime completedAt;
 }
-

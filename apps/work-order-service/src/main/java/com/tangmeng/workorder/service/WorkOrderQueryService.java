@@ -52,4 +52,3 @@ public class WorkOrderQueryService {
         return mapper.selectList(query);
     }
 }
-

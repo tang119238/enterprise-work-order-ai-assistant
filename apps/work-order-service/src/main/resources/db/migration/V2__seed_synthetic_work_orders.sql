@@ -83,4 +83,3 @@ SELECT
 FROM synthetic
 ORDER BY n
 ON CONFLICT (work_order_no) DO NOTHING;
-

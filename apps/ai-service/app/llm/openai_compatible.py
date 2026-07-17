@@ -1,4 +1,5 @@
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -12,6 +13,11 @@ from app.llm.errors import (
 )
 
 
+@dataclass(frozen=True)
+class OpenAICompatibleCapabilities:
+    supports_temperature: bool = True
+
+
 class OpenAICompatibleProvider:
     def __init__(
         self,
@@ -21,6 +27,7 @@ class OpenAICompatibleProvider:
         api_key: str,
         model: str,
         timeout_seconds: float,
+        capabilities: OpenAICompatibleCapabilities | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.provider_name = provider_name
@@ -28,6 +35,7 @@ class OpenAICompatibleProvider:
         self.api_key = api_key
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.capabilities = capabilities or OpenAICompatibleCapabilities()
         self._client = client
 
     async def generate(self, request: LLMRequest) -> LLMResult:
@@ -37,9 +45,10 @@ class OpenAICompatibleProvider:
             "messages": [
                 {"role": message.role, "content": message.content} for message in request.messages
             ],
-            "temperature": request.temperature,
             "max_tokens": request.max_tokens,
         }
+        if self.capabilities.supports_temperature:
+            payload["temperature"] = request.temperature
         response = await self._post(payload)
         raise_for_provider_status(response)
         try:

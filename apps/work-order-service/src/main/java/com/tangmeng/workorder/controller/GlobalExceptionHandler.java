@@ -29,4 +29,3 @@ public class GlobalExceptionHandler {
             .body(ApiError.of("INVALID_QUERY_PARAMETER", "Invalid query parameter"));
     }
 }
-

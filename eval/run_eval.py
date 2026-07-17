@@ -63,13 +63,7 @@ def evaluate_case(
 
     valid_citations = 0
     for citation in citations:
-        document_id = _non_blank_string(citation.get("document_id"))
-        quote = _non_blank_string(citation.get("quote"))
-        if (
-            document_id is not None
-            and quote is not None
-            and quote in policy_texts.get(document_id, "")
-        ):
+        if _citation_is_valid(citation, policy_texts):
             valid_citations += 1
 
     tool_calls = _mapping_items(response.get("tool_calls"))
@@ -269,6 +263,33 @@ def _non_blank_string(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _citation_is_valid(
+    citation: Mapping[str, object], policy_texts: Mapping[str, str]
+) -> bool:
+    document_id = _non_blank_string(citation.get("document_id"))
+    title = _non_blank_string(citation.get("title"))
+    section = _non_blank_string(citation.get("section"))
+    quote = _non_blank_string(citation.get("quote"))
+    if None in (document_id, title, section, quote):
+        return False
+
+    assert document_id is not None
+    assert title is not None
+    assert section is not None
+    assert quote is not None
+    policy_text = policy_texts.get(document_id, "")
+    title_match = re.search(r"^#\s+(.+?)\s*$", policy_text, re.MULTILINE)
+    if title_match is None or title_match.group(1).strip() != title:
+        return False
+
+    section_match = re.search(
+        rf"^##\s+{re.escape(section)}\s*$\n(?P<body>.*?)(?=^##\s+|\Z)",
+        policy_text,
+        re.MULTILINE | re.DOTALL,
+    )
+    return section_match is not None and quote in section_match.group("body")
+
+
 def _required_string(item: Mapping[str, Any], key: str) -> str:
     value = _non_blank_string(item.get(key))
     if value is None:
@@ -295,6 +316,8 @@ def _meets_thresholds(summary: Mapping[str, object]) -> bool:
         and float(summary["retrieval_recall_at_5"]) >= 0.80
         and float(summary["citation_validity"]) >= 0.90
         and float(summary["tool_accuracy"]) == 1.0
+        and float(summary["required_fact_accuracy"]) == 1.0
+        and float(summary["forbidden_fact_accuracy"]) == 1.0
     )
 
 
@@ -329,6 +352,8 @@ def main() -> int:
     print(f"retrieval Recall@5: {summary['retrieval_recall_at_5']:.2%}")
     print(f"citation validity: {summary['citation_validity']:.2%}")
     print(f"tool accuracy: {summary['tool_accuracy']:.2%}")
+    print(f"required fact accuracy: {summary['required_fact_accuracy']:.2%}")
+    print(f"forbidden fact accuracy: {summary['forbidden_fact_accuracy']:.2%}")
     print(f"report: {args.output}")
     return 0 if _meets_thresholds(summary) else 1
 

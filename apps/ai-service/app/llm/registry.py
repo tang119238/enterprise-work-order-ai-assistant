@@ -4,7 +4,10 @@ from app.config import Settings
 from app.llm.ark import ArkResponsesProvider
 from app.llm.contracts import LLMProvider
 from app.llm.offline import OfflineTemplateProvider
-from app.llm.openai_compatible import OpenAICompatibleProvider
+from app.llm.openai_compatible import (
+    OpenAICompatibleCapabilities,
+    OpenAICompatibleProvider,
+)
 
 OPENAI_COMPATIBLE_BASE_URLS = {
     "deepseek": "https://api.deepseek.com",
@@ -15,6 +18,11 @@ OPENAI_COMPATIBLE_BASE_URLS = {
 }
 ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 SUPPORTED_PROVIDERS = {"offline", "ark", "custom", *OPENAI_COMPATIBLE_BASE_URLS}
+
+
+def _capabilities_for(provider_name: str, model: str) -> OpenAICompatibleCapabilities:
+    is_kimi_k2_6 = provider_name == "kimi" and model.strip().lower().startswith("kimi-k2.6")
+    return OpenAICompatibleCapabilities(supports_temperature=not is_kimi_k2_6)
 
 
 def build_provider(
@@ -49,5 +57,6 @@ def build_provider(
         api_key=api_key,
         model=settings.llm_model,
         timeout_seconds=settings.llm_timeout_seconds,
+        capabilities=_capabilities_for(provider_name, settings.llm_model),
         client=client,
     )
