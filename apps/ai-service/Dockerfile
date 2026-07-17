@@ -6,11 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 COPY apps/ai-service/pyproject.toml ./pyproject.toml
-COPY apps/ai-service/app ./app
 RUN python -m pip install --upgrade pip \
     && python -m pip install . \
     && groupadd --system app \
     && useradd --system --gid app --home-dir /nonexistent --shell /usr/sbin/nologin app
+COPY apps/ai-service/app ./app
 COPY knowledge ./knowledge
 
 USER app

@@ -34,5 +34,5 @@ def build_citations(hits: list[SearchHit]) -> list[Citation]:
             section=hit.section,
             quote=hit.text,
         )
-        for hit in hits[:3]
+        for hit in hits[:5]
     ]

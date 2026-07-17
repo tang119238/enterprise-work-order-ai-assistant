@@ -1,4 +1,7 @@
+import asyncio
+
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent.graph import AgentDependencies, build_graph
 from app.api.models import ChatRequest, ChatResponse
@@ -10,6 +13,8 @@ from app.llm.gateway import LLMGateway
 from app.llm.offline import OfflineTemplateProvider
 from app.llm.registry import build_provider
 from app.tools.work_order_client import WorkOrderClient
+
+REQUEST_TIMEOUT_SECONDS = 60.0
 
 
 def create_app(
@@ -32,7 +37,9 @@ def create_app(
         )
         provider_name = getattr(provider, "provider_name", settings.llm_provider)
     else:
-        provider_name = "offline"
+        provider_name = getattr(
+            dependencies.gateway.provider, "provider_name", "offline"
+        )
     graph = build_graph(dependencies)
     application = FastAPI(
         title="Enterprise Work Order AI Assistant",
@@ -40,18 +47,38 @@ def create_app(
         docs_url="/docs",
         redoc_url=None,
     )
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @application.post("/chat", response_model=ChatResponse)
     async def chat(request: ChatRequest) -> ChatResponse:
         try:
-            result = await graph.ainvoke(
-                {"session_id": request.session_id, "message": request.message}
+            result = await asyncio.wait_for(
+                graph.ainvoke(
+                    {"session_id": request.session_id, "message": request.message}
+                ),
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail={"code": "REQUEST_TIMEOUT", "message": "Request timed out"},
             )
         except ProviderError as error:
             raise HTTPException(
                 status_code=503,
                 detail={"code": error.code, "message": str(error)},
             ) from error
+        except Exception:
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "INTERNAL_ERROR", "message": "Internal server error"},
+            )
         return ChatResponse.model_validate(result["response"])
 
     @application.get("/health")

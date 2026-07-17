@@ -28,4 +28,10 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
             .body(ApiError.of("INVALID_QUERY_PARAMETER", "Invalid query parameter"));
     }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiError> handleGeneric(Exception exception) {
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .body(ApiError.of("INTERNAL_ERROR", "Internal server error"));
+    }
 }

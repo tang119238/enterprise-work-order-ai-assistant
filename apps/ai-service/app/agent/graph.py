@@ -68,28 +68,32 @@ def build_graph(
     async def call_work_order_tool(state: AgentState) -> dict[str, object]:
         work_order_no = extract_work_order_no(state["message"])
         tool_calls = list(state.get("tool_calls", []))
+        if work_order_no and (state["route"] == "combined" or "返工" in state["message"]):
+            name = "get_rework_chain"
+            arguments: dict[str, str | int | float | bool | None] = {
+                "work_order_no": work_order_no
+            }
+        elif work_order_no:
+            name = "get_work_order"
+            arguments = {"work_order_no": work_order_no}
+        else:
+            name = "search_work_orders"
+            arguments = {}
         try:
-            if work_order_no and (state["route"] == "combined" or "返工" in state["message"]):
-                records = await dependencies.work_order_client.get_rework_chain(work_order_no)
-                name = "get_rework_chain"
-                arguments: dict[str, str | int | float | bool | None] = {
-                    "work_order_no": work_order_no
-                }
-            elif work_order_no:
+            if name == "get_rework_chain":
+                records: list[WorkOrderRecord] = (
+                    await dependencies.work_order_client.get_rework_chain(work_order_no)
+                )
+            elif name == "get_work_order":
                 records = [await dependencies.work_order_client.get_work_order(work_order_no)]
-                name = "get_work_order"
-                arguments = {"work_order_no": work_order_no}
             else:
                 filters = extract_search_filters(state["message"])
+                arguments = dict(filters)
                 page = await dependencies.work_order_client.search_work_orders(filters)
                 records = page.items
-                name = "search_work_orders"
-                arguments = dict(filters)
             tool_calls.append(ToolCallRecord(name=name, arguments=arguments, status="success"))
             return {"work_orders": records, "tool_calls": tool_calls}
         except WorkOrderToolError as error:
-            name = "get_work_order" if work_order_no else "search_work_orders"
-            arguments = {"work_order_no": work_order_no} if work_order_no else {}
             tool_calls.append(ToolCallRecord(name=name, arguments=arguments, status="error"))
             return {
                 "work_orders": [],

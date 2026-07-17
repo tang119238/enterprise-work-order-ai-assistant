@@ -1,13 +1,19 @@
+import logging
 import re
 from pathlib import Path
 
 from app.knowledge.models import PolicyChunk
+
+logger = logging.getLogger(__name__)
 
 DOCUMENT_ID_PATTERN = re.compile(r"<!--\s*document_id:\s*([a-z0-9-]+)\s*-->", re.IGNORECASE)
 HEADING_PATTERN = re.compile(r"^(#{1,3})\s+(.+?)\s*$")
 
 
 def load_policy_directory(directory: Path) -> list[PolicyChunk]:
+    if not directory.is_dir():
+        logger.warning("Knowledge directory not found: %s", directory)
+        return []
     chunks: list[PolicyChunk] = []
     for path in sorted(directory.glob("*.md")):
         chunks.extend(load_policy(path))
