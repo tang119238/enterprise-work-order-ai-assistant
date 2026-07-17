@@ -15,12 +15,22 @@ def settings_for(provider: str, *, api_key: str = "test-key") -> Settings:
     )
 
 
-@pytest.mark.parametrize("name", ["deepseek", "bailian", "zhipu", "kimi", "qianfan"])
-def test_domestic_presets_use_openai_compatible_provider(name: str) -> None:
+@pytest.mark.parametrize(
+    ("name", "expected_base_url"),
+    [
+        ("deepseek", "https://api.deepseek.com"),
+        ("bailian", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        ("zhipu", "https://open.bigmodel.cn/api/paas/v4"),
+        ("kimi", "https://api.moonshot.cn/v1"),
+        ("qianfan", "https://qianfan.baidubce.com/v2"),
+    ],
+)
+def test_domestic_presets_use_openai_compatible_provider(name: str, expected_base_url: str) -> None:
     provider = build_provider(settings_for(name))
 
     assert isinstance(provider, OpenAICompatibleProvider)
     assert provider.provider_name == name
+    assert provider.base_url == expected_base_url
 
 
 def test_ark_uses_dedicated_responses_adapter() -> None:

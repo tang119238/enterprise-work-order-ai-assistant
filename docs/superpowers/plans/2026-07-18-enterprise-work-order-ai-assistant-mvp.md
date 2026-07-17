@@ -628,15 +628,15 @@ git commit -m "ci: verify one-command offline MVP"
 - Create: `docs/demo-script.md`
 - Create: `docs/provider-configuration.md`
 
-- [ ] **Step 1: Complete the recruiter-facing README**
+- [x] **Step 1: Complete the recruiter-facing README**
 
 Document prerequisites, one-command startup, three copyable `curl` requests, architecture, synthetic-data boundary, provider configuration, evaluation results, troubleshooting, and a concise technology decision section. Clearly distinguish Mock contract verification from real-key verification.
 
-- [ ] **Step 2: Add provider examples without secrets**
+- [x] **Step 2: Add provider examples without secrets**
 
 Provide configuration tables for `offline`, `deepseek`, `bailian`, `zhipu`, `kimi`, `qianfan`, `ark`, and `custom`. Use clearly labelled example model names in documentation, but keep `LLM_MODEL` blank in executable `.env.example` so offline startup always works.
 
-- [ ] **Step 3: Run the complete verification suite**
+- [x] **Step 3: Run the complete verification suite**
 
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Zulu\zulu-17'
@@ -650,7 +650,7 @@ git grep -n -I -E "(sk-[A-Za-z0-9_-]{16,}|Bearer [A-Za-z0-9._-]{20,}|C:\\\\Users
 
 Expected: all test/lint/type commands pass, `git diff --check` is silent, and the sensitive-content scan returns no matches outside the internal plan exclusion.
 
-- [ ] **Step 4: Commit the verified release candidate**
+- [x] **Step 4: Commit the verified release candidate**
 
 ```powershell
 git add README.md docs

@@ -10,7 +10,7 @@ OPENAI_COMPATIBLE_BASE_URLS = {
     "deepseek": "https://api.deepseek.com",
     "bailian": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "zhipu": "https://open.bigmodel.cn/api/paas/v4",
-    "kimi": "https://api.moonshot.ai/v1",
+    "kimi": "https://api.moonshot.cn/v1",
     "qianfan": "https://qianfan.baidubce.com/v2",
 }
 ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
