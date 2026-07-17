@@ -39,4 +39,3 @@ class LLMGateway:
             raise last_error
         fallback = await self.fallback_provider.generate(request)
         return replace(fallback, fallback=True, error_code=last_error.code)
-

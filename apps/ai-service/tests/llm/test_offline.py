@@ -17,4 +17,3 @@ async def test_offline_provider_returns_trusted_fallback_text() -> None:
     assert result.provider == "offline"
     assert result.model == "deterministic-template"
     assert result.fallback is False
-

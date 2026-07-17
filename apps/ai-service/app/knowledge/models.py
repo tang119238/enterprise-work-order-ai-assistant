@@ -13,4 +13,3 @@ class PolicyChunk(BaseModel):
 
 class SearchHit(PolicyChunk):
     score: float
-

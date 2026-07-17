@@ -28,8 +28,4 @@ class BM25PolicyIndex:
             ),
             key=lambda item: (-item[0], item[1].chunk_id),
         )
-        return [
-            SearchHit(**chunk.model_dump(), score=score)
-            for score, chunk in ranked[:limit]
-        ]
-
+        return [SearchHit(**chunk.model_dump(), score=score) for score, chunk in ranked[:limit]]

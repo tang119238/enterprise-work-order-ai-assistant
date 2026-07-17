@@ -47,4 +47,3 @@ async def test_ark_provider_maps_responses_request_and_output() -> None:
     assert result.provider == "ark"
     assert result.input_tokens == 9
     assert result.output_tokens == 6
-

@@ -35,8 +35,7 @@ class OpenAICompatibleProvider:
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [
-                {"role": message.role, "content": message.content}
-                for message in request.messages
+                {"role": message.role, "content": message.content} for message in request.messages
             ],
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
@@ -84,4 +83,3 @@ class OpenAICompatibleProvider:
 
 def _optional_int(value: object) -> int | None:
     return int(value) if isinstance(value, int | float) else None
-

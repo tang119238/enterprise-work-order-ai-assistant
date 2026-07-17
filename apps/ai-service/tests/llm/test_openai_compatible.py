@@ -73,4 +73,3 @@ async def test_auth_error_does_not_expose_key_or_response_body() -> None:
             )
 
     assert "test-key" not in str(error.value)
-

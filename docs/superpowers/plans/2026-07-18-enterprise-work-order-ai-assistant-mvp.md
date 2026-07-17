@@ -483,7 +483,7 @@ Expected: all adapter, registry, retry, fallback, and secret-redaction tests pas
 - Test: `apps/ai-service/tests/agent/test_graph.py`
 - Test: `apps/ai-service/tests/api/test_chat.py`
 
-- [ ] **Step 1: Write failing tests for all three routes**
+- [x] **Step 1: Write failing tests for all three routes**
 
 ```python
 @pytest.mark.parametrize(
@@ -506,7 +506,7 @@ def test_chat_contract(client: TestClient) -> None:
     assert set(["answer", "citations", "tool_calls", "latency_ms", "model"]) <= body.keys()
 ```
 
-- [ ] **Step 2: Verify agent/API tests are RED**
+- [x] **Step 2: Verify agent/API tests are RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest apps/ai-service/tests/agent apps/ai-service/tests/api apps/ai-service/tests/tools -q
@@ -514,11 +514,11 @@ def test_chat_contract(client: TestClient) -> None:
 
 Expected: import errors for router, graph, tools, and application factory.
 
-- [ ] **Step 3: Implement auditable work-order tools**
+- [x] **Step 3: Implement auditable work-order tools**
 
 `WorkOrderClient` exposes `get_work_order`, `search_work_orders`, and `get_rework_chain`. It maps 404 to `WORK_ORDER_NOT_FOUND`, timeout/connection errors to `WORK_ORDER_SERVICE_UNAVAILABLE`, and returns only the public DTO fields. Each graph tool record contains name, arguments, and `success` or `error`; it does not include full descriptions in logs.
 
-- [ ] **Step 4: Implement the LangGraph state machine**
+- [x] **Step 4: Implement the LangGraph state machine**
 
 The compiled graph follows exact routes:
 
@@ -532,11 +532,11 @@ compose_answer -> validate_grounding -> build_response -> END
 
 Structured work-order facts are formatted deterministically before any model call. Model output may explain retrieved policy but may not provide citations or tool-call metadata; those are built from actual chunks and calls.
 
-- [ ] **Step 5: Implement `/chat` and `/health`**
+- [x] **Step 5: Implement `/chat` and `/health`**
 
 Pydantic response fields are exactly `answer`, `citations`, `tool_calls`, `latency_ms`, `model`, and `warnings`. Reject blank messages and messages above 2,000 characters with HTTP 422. `/health` reports service status and configured provider without exposing secrets.
 
-- [ ] **Step 6: Run agent/API tests and commit**
+- [x] **Step 6: Run agent/API tests and commit**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest apps/ai-service/tests -q

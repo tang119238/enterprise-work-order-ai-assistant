@@ -30,4 +30,3 @@ class LLMResult:
 
 class LLMProvider(Protocol):
     async def generate(self, request: LLMRequest) -> LLMResult: ...
-

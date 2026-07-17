@@ -42,4 +42,3 @@ def test_bm25_returns_empty_for_unrelated_question() -> None:
     )
 
     assert policy_index.search("量子计算价格", limit=5) == []
-

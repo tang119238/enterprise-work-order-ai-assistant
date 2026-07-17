@@ -56,4 +56,3 @@ def raise_for_provider_status(response: httpx.Response) -> None:
         raise ProviderUnavailableError
     if response.status_code >= 400:
         raise ProviderBadResponseError
-

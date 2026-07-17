@@ -11,4 +11,3 @@ class OfflineTemplateProvider:
             model="deterministic-template",
             latency_ms=0,
         )
-

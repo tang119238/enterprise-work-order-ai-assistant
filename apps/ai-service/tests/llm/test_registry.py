@@ -43,4 +43,3 @@ def test_custom_provider_requires_explicit_base_url() -> None:
 def test_unknown_provider_is_rejected() -> None:
     with pytest.raises(ValueError, match="Unsupported LLM_PROVIDER"):
         build_provider(settings_for("unknown"))
-

@@ -35,8 +35,7 @@ class ArkResponsesProvider:
         payload: dict[str, Any] = {
             "model": self.model,
             "input": [
-                {"role": message.role, "content": message.content}
-                for message in request.messages
+                {"role": message.role, "content": message.content} for message in request.messages
             ],
             "temperature": request.temperature,
             "max_output_tokens": request.max_tokens,
@@ -101,4 +100,3 @@ def _extract_output_text(body: dict[str, Any]) -> str:
 
 def _optional_int(value: object) -> int | None:
     return int(value) if isinstance(value, int | float) else None
-

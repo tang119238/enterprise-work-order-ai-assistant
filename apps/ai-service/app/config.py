@@ -24,4 +24,3 @@ class Settings(BaseSettings):
 
     def api_key_value(self) -> str:
         return self.llm_api_key.get_secret_value().strip() if self.llm_api_key else ""
-
