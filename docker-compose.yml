@@ -1,0 +1,70 @@
+name: enterprise-work-order-ai-assistant
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: workorders
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d workorders"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - work-order-data:/var/lib/postgresql/data
+
+  work-order-service:
+    build:
+      context: ./apps/work-order-service
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/workorders
+      DB_USERNAME: demo
+      DB_PASSWORD: demo
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=70.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: apps/ai-service/Dockerfile
+    environment:
+      LLM_PROVIDER: ${LLM_PROVIDER:-offline}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      LLM_FALLBACK_ENABLED: ${LLM_FALLBACK_ENABLED:-true}
+      WORK_ORDER_BASE_URL: http://work-order-service:8080
+      KNOWLEDGE_PATH: /app/knowledge/policies
+    depends_on:
+      work-order-service:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:8000:8000"
+
+volumes:
+  work-order-data:

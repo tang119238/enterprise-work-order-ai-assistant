@@ -1,0 +1,272 @@
+[
+  {
+    "id": "K01",
+    "category": "knowledge",
+    "message": "工单创建时必须包含哪些信息？",
+    "expected_document_ids": ["work-order-lifecycle"],
+    "expected_tools": [],
+    "required_facts": ["问题标题", "所属项目"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "K02",
+    "category": "knowledge",
+    "message": "派单后负责人无法处理应该怎么办？",
+    "expected_document_ids": ["work-order-lifecycle"],
+    "expected_tools": [],
+    "required_facts": ["退回并填写原因"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "K03",
+    "category": "knowledge",
+    "message": "已完成和已关闭两个状态有什么区别？",
+    "expected_document_ids": ["work-order-lifecycle"],
+    "expected_tools": [],
+    "required_facts": ["已完成", "已关闭"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "K04",
+    "category": "knowledge",
+    "message": "人工来源的工单创建时需要说明什么？",
+    "expected_document_ids": ["work-order-lifecycle"],
+    "expected_tools": [],
+    "required_facts": ["报事渠道"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "K05",
+    "category": "knowledge",
+    "message": "紧急、高、中、低优先级的目标处理时限分别是多少？",
+    "expected_document_ids": ["sla-policy"],
+    "expected_tools": [],
+    "required_facts": ["两小时", "四十八小时"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "K06",
+    "category": "knowledge",
+    "message": "判断某张工单是否临近超时时应该优先看哪个字段？",
+    "expected_document_ids": ["sla-policy"],
+    "expected_tools": [],
+    "required_facts": ["due_at"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "K07",
+    "category": "knowledge",
+    "message": "验收等待时间和处理时限应该如何统计？",
+    "expected_document_ids": ["sla-policy"],
+    "expected_tools": [],
+    "required_facts": ["分开统计"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "K08",
+    "category": "knowledge",
+    "message": "哪些验收情况可以发起返工？",
+    "expected_document_ids": ["rework-policy"],
+    "expected_tools": [],
+    "required_facts": ["验收标准"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "K09",
+    "category": "knowledge",
+    "message": "再次返工时应该怎样关联根工单？",
+    "expected_document_ids": ["rework-policy"],
+    "expected_tools": [],
+    "required_facts": ["同一个根工单"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "K10",
+    "category": "knowledge",
+    "message": "如何防止同一次验收失败重复创建返工单？",
+    "expected_document_ids": ["rework-policy"],
+    "expected_tools": [],
+    "required_facts": ["稳定的业务标识"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "W01",
+    "category": "work_order",
+    "message": "查询 WO-20260718-001 当前状态",
+    "expected_document_ids": [],
+    "expected_tools": ["get_work_order"],
+    "required_facts": ["WO-20260718-001", "PENDING_DISPATCH"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "W02",
+    "category": "work_order",
+    "message": "WO-20260718-010 的负责人是谁",
+    "expected_document_ids": [],
+    "expected_tools": ["get_work_order"],
+    "required_facts": ["WO-20260718-010", "URGENT"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "W03",
+    "category": "work_order",
+    "message": "查询 WO-20260718-018 的根工单",
+    "expected_document_ids": [],
+    "expected_tools": ["get_work_order"],
+    "required_facts": ["WO-20260718-018", "WO-20260718-017"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "W04",
+    "category": "work_order",
+    "message": "查询 WO-20260718-050 截止时间",
+    "expected_document_ids": [],
+    "expected_tools": ["get_work_order"],
+    "required_facts": ["WO-20260718-050", "CLOSED"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "W05",
+    "category": "work_order",
+    "message": "列出处理中工单",
+    "expected_document_ids": [],
+    "expected_tools": ["search_work_orders"],
+    "required_facts": ["WO-20260718-048", "PROCESSING"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "W06",
+    "category": "work_order",
+    "message": "查询待接单工单",
+    "expected_document_ids": [],
+    "expected_tools": ["search_work_orders"],
+    "required_facts": ["WO-20260718-047", "PENDING_ACCEPTANCE"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "W07",
+    "category": "work_order",
+    "message": "列出已关闭工单",
+    "expected_document_ids": [],
+    "expected_tools": ["search_work_orders"],
+    "required_facts": ["WO-20260718-050", "CLOSED"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "W08",
+    "category": "work_order",
+    "message": "列出紧急工单",
+    "expected_document_ids": [],
+    "expected_tools": ["search_work_orders"],
+    "required_facts": ["WO-20260718-050", "URGENT"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "W09",
+    "category": "work_order",
+    "message": "查询高优先级工单",
+    "expected_document_ids": [],
+    "expected_tools": ["search_work_orders"],
+    "required_facts": ["WO-20260718-048", "HIGH"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "W10",
+    "category": "work_order",
+    "message": "查询云帆园区的低优先级工单",
+    "expected_document_ids": [],
+    "expected_tools": ["search_work_orders"],
+    "required_facts": ["WO-20260718-047", "LOW"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "C01",
+    "category": "combined",
+    "message": "WO-20260718-008 为什么是返工单，接下来怎么处理？",
+    "expected_document_ids": ["rework-policy"],
+    "expected_tools": ["get_rework_chain"],
+    "required_facts": ["WO-20260718-007", "WO-20260718-008"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "C02",
+    "category": "combined",
+    "message": "WO-20260718-018 的返工时限规则是什么？",
+    "expected_document_ids": ["rework-policy"],
+    "expected_tools": ["get_rework_chain"],
+    "required_facts": ["WO-20260718-017", "WO-20260718-018"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "C03",
+    "category": "combined",
+    "message": "WO-20260718-028 的返工责任有什么要求？",
+    "expected_document_ids": ["rework-policy"],
+    "expected_tools": ["get_rework_chain"],
+    "required_facts": ["WO-20260718-027", "WO-20260718-028"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "C04",
+    "category": "combined",
+    "message": "WO-20260718-038 再次返工时根工单关联规则是什么？",
+    "expected_document_ids": ["rework-policy"],
+    "expected_tools": ["get_rework_chain"],
+    "required_facts": ["WO-20260718-037", "WO-20260718-038"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "C05",
+    "category": "combined",
+    "message": "WO-20260718-048 的返工幂等与审计要求是什么？",
+    "expected_document_ids": ["rework-policy"],
+    "expected_tools": ["get_rework_chain"],
+    "required_facts": ["WO-20260718-047", "WO-20260718-048"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "C06",
+    "category": "combined",
+    "message": "WO-20260718-010 为什么是紧急优先级，处理时限规则是什么？",
+    "expected_document_ids": ["sla-policy"],
+    "expected_tools": ["get_rework_chain"],
+    "required_facts": ["WO-20260718-010", "URGENT"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "C07",
+    "category": "combined",
+    "message": "WO-20260718-003 的高优先级处理时限制度是什么？",
+    "expected_document_ids": ["sla-policy"],
+    "expected_tools": ["get_rework_chain"],
+    "required_facts": ["WO-20260718-003", "HIGH"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "C08",
+    "category": "combined",
+    "message": "WO-20260718-004 已完成为什么还不能算关闭，验收规则是什么？",
+    "expected_document_ids": ["work-order-lifecycle"],
+    "expected_tools": ["get_rework_chain"],
+    "required_facts": ["WO-20260718-004", "COMPLETED"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "C09",
+    "category": "combined",
+    "message": "WO-20260718-001 处于待派单时应如何处理，派单规则是什么？",
+    "expected_document_ids": ["work-order-lifecycle"],
+    "expected_tools": ["get_rework_chain"],
+    "required_facts": ["WO-20260718-001", "PENDING_DISPATCH"],
+    "forbidden_facts": ["WO-20991231-999"]
+  },
+  {
+    "id": "C10",
+    "category": "combined",
+    "message": "WO-20260718-002 待接单负责人无法处理应该怎么处理？",
+    "expected_document_ids": ["work-order-lifecycle"],
+    "expected_tools": ["get_rework_chain"],
+    "required_facts": ["WO-20260718-002", "PENDING_ACCEPTANCE"],
+    "forbidden_facts": ["WO-20991231-999"]
+  }
+]

@@ -558,7 +558,7 @@ Expected: all Python tests pass in offline mode.
 - Create: `.github/workflows/ci.yml`
 - Test: `apps/ai-service/tests/eval/test_evaluator.py`
 
-- [ ] **Step 1: Write a failing evaluator unit test**
+- [x] **Step 1: Write a failing evaluator unit test**
 
 ```python
 def test_evaluator_calculates_required_metrics() -> None:
@@ -582,17 +582,17 @@ def test_evaluator_calculates_required_metrics() -> None:
     assert result.tools_correct is True
 ```
 
-- [ ] **Step 2: Implement the 30-case offline evaluation set**
+- [x] **Step 2: Implement the 30-case offline evaluation set**
 
 `eval/questions.json` contains exactly 10 knowledge, 10 work-order, and 10 combined cases. Each case specifies `message`, `expected_document_ids`, `expected_tools`, `required_facts`, and `forbidden_facts`. The evaluator calculates retrieval Recall@5, citation validity, tool accuracy, and successful-request rate.
 
-- [ ] **Step 3: Add production-like container builds**
+- [x] **Step 3: Add production-like container builds**
 
 The Java Dockerfile uses a Maven/Temurin 17 build stage and a Temurin 17 JRE runtime. The Python Dockerfile uses `python:3.12-slim`, installs the package, copies only application and knowledge files, and runs uvicorn as a non-root user.
 
 `docker-compose.yml` starts `postgres`, `work-order-service`, and `ai-service`, adds health checks, uses internal service URLs, and exposes only Java `8080` and AI `8000`. The default Provider remains `offline`.
 
-- [ ] **Step 4: Run the complete local acceptance path**
+- [x] **Step 4: Run the complete local acceptance path**
 
 ```powershell
 docker compose up --build -d
@@ -611,7 +611,7 @@ citation validity: >= 0.90
 tool accuracy: 1.00
 ```
 
-- [ ] **Step 5: Add CI and commit**
+- [x] **Step 5: Add CI and commit**
 
 GitHub Actions must run Java tests, Python lint/type/tests, Docker builds, Compose smoke tests, the offline evaluator, and a repository secret/path scan. It must not use repository secrets or call live model platforms.
 
