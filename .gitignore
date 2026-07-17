@@ -1,0 +1,16 @@
+.idea/
+.vscode/
+*.iml
+**/target/
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+.venv/
+venv/
+.env
+*.log
+eval/report.json
+secrets/
+.worktrees/
+
