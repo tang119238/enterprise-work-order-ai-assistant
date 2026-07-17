@@ -308,7 +308,7 @@ git commit -m "feat(java): expose synthetic work order read APIs"
 - Test: `apps/ai-service/tests/knowledge/test_loader.py`
 - Test: `apps/ai-service/tests/knowledge/test_bm25.py`
 
-- [ ] **Step 1: Write failing loader and retrieval tests**
+- [x] **Step 1: Write failing loader and retrieval tests**
 
 ```python
 def test_loader_keeps_document_and_section_identity(tmp_path: Path) -> None:
@@ -338,7 +338,7 @@ def test_bm25_returns_rework_policy_for_rework_question() -> None:
     assert hits[0].document_id == "rework-policy"
 ```
 
-- [ ] **Step 2: Verify pytest is RED**
+- [x] **Step 2: Verify pytest is RED**
 
 ```powershell
 python -m venv .venv
@@ -348,11 +348,11 @@ python -m venv .venv
 
 Expected: import errors because the knowledge package is not implemented.
 
-- [ ] **Step 3: Implement focused Markdown chunking and BM25**
+- [x] **Step 3: Implement focused Markdown chunking and BM25**
 
 `PolicyChunk` and `SearchHit` are immutable Pydantic models. The loader reads the `document_id` comment, H1 title, and H2/H3 sections; each chunk remains between roughly 200 and 500 Chinese characters where possible. `BM25PolicyIndex` tokenizes with `jieba.lcut`, stores source chunks, returns at most five hits, and never fabricates citations.
 
-- [ ] **Step 4: Add three explicitly synthetic policy documents**
+- [x] **Step 4: Add three explicitly synthetic policy documents**
 
 Each policy begins with this notice and a stable document ID:
 
@@ -362,7 +362,7 @@ Each policy begins with this notice and a stable document ID:
 
 Cover lifecycle, rework-chain handling, SLA/priority, acceptance, and closure rules without using real company names.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest apps/ai-service/tests/knowledge -q

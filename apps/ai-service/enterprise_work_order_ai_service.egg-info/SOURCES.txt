@@ -1,0 +1,7 @@
+pyproject.toml
+app/__init__.py
+enterprise_work_order_ai_service.egg-info/PKG-INFO
+enterprise_work_order_ai_service.egg-info/SOURCES.txt
+enterprise_work_order_ai_service.egg-info/dependency_links.txt
+enterprise_work_order_ai_service.egg-info/requires.txt
+enterprise_work_order_ai_service.egg-info/top_level.txt
