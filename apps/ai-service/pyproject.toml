@@ -47,3 +47,6 @@ python_version = "3.12"
 strict = true
 packages = ["app"]
 
+[[tool.mypy.overrides]]
+module = ["jieba", "rank_bm25"]
+ignore_missing_imports = true

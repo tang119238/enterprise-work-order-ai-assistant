@@ -388,7 +388,7 @@ Expected: knowledge tests pass.
 - Test: `apps/ai-service/tests/llm/test_ark.py`
 - Test: `apps/ai-service/tests/llm/test_gateway.py`
 
-- [ ] **Step 1: Write the cross-provider contract tests**
+- [x] **Step 1: Write the cross-provider contract tests**
 
 ```python
 @pytest.mark.asyncio
@@ -419,7 +419,7 @@ def settings_for(provider: str) -> Settings:
     )
 ```
 
-- [ ] **Step 2: Verify provider tests are RED**
+- [x] **Step 2: Verify provider tests are RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest apps/ai-service/tests/llm -q
@@ -427,7 +427,7 @@ def settings_for(provider: str) -> Settings:
 
 Expected: import errors for the absent LLM modules.
 
-- [ ] **Step 3: Implement the common contracts and three providers**
+- [x] **Step 3: Implement the common contracts and three providers**
 
 Use these stable contracts:
 
@@ -454,11 +454,11 @@ class LLMResult:
 
 The compatible adapter posts to `<base_url>/chat/completions`; the Ark adapter posts to `<base_url>/responses`. Both use an injected `httpx.AsyncClient`, bearer authorization, explicit timeout, and safe response parsing. Neither logs request headers or message bodies.
 
-- [ ] **Step 4: Implement retries and deterministic fallback**
+- [x] **Step 4: Implement retries and deterministic fallback**
 
 `LLMGateway.generate()` retries timeout, 429, and 5xx failures at most `LLM_MAX_RETRIES`, never retries authentication or invalid-model errors, and returns the offline result with `fallback=True` and a safe `error_code` when fallback is enabled. Inject the sleep coroutine so tests complete without real delays.
 
-- [ ] **Step 5: Run provider tests and commit**
+- [x] **Step 5: Run provider tests and commit**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest apps/ai-service/tests/llm -q
