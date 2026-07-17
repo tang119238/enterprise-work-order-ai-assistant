@@ -180,7 +180,7 @@ git commit -m "feat(java): add work order query domain"
 - Test: `apps/work-order-service/src/test/java/com/tangmeng/workorder/controller/WorkOrderControllerTest.java`
 - Test: `apps/work-order-service/src/test/java/com/tangmeng/workorder/integration/WorkOrderPostgresIntegrationTest.java`
 
-- [ ] **Step 1: Write failing MockMvc tests for the public contract**
+- [x] **Step 1: Write failing MockMvc tests for the public contract**
 
 ```java
 @WebMvcTest(WorkOrderController.class)
@@ -217,7 +217,7 @@ class WorkOrderControllerTest {
 }
 ```
 
-- [ ] **Step 2: Verify the controller test is RED**
+- [x] **Step 2: Verify the controller test is RED**
 
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Zulu\zulu-17'
@@ -226,7 +226,7 @@ mvn -f apps/work-order-service/pom.xml -Dtest=WorkOrderControllerTest test
 
 Expected: compilation fails because controller and response types do not exist.
 
-- [ ] **Step 3: Implement the three GET endpoints**
+- [x] **Step 3: Implement the three GET endpoints**
 
 Controller signatures must be:
 
@@ -253,11 +253,11 @@ The service must build a MyBatis-Plus `LambdaQueryWrapper` only for nonblank fil
 
 Configure Jackson with `spring.jackson.property-naming-strategy: SNAKE_CASE` so Java DTO fields match the published JSON contract.
 
-- [ ] **Step 4: Add deterministic PostgreSQL migrations**
+- [x] **Step 4: Add deterministic PostgreSQL migrations**
 
 `V1__create_work_orders.sql` creates the `work_order` table and indexes on status, priority, project, assignee, created time, and root number. `V2__seed_synthetic_work_orders.sql` inserts exactly 50 rows by selecting from `generate_series(1, 50)` and uses `ON CONFLICT (work_order_no) DO NOTHING`; rows 8, 18, 28, 38, and 48 are rework orders linked to the preceding root order.
 
-- [ ] **Step 5: Add and run Testcontainers integration coverage**
+- [x] **Step 5: Add and run Testcontainers integration coverage**
 
 ```java
 @Testcontainers(disabledWithoutDocker = true)
@@ -287,7 +287,7 @@ mvn -f apps/work-order-service/pom.xml test
 
 Expected: all unit tests pass; the PostgreSQL test runs when Docker is available and otherwise reports skipped.
 
-- [ ] **Step 6: Commit the Java API**
+- [x] **Step 6: Commit the Java API**
 
 ```powershell
 git add apps/work-order-service

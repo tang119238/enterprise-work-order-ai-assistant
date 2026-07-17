@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: work-order-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/workorders}
+    username: ${DB_USERNAME:demo}
+    password: ${DB_PASSWORD:demo}
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: non_null
+  flyway:
+    enabled: true
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
