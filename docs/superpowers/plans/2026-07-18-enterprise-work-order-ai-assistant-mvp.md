@@ -19,7 +19,7 @@
 - Create: `README.md`
 - Create: `docs/superpowers/specs/2026-07-18-enterprise-work-order-ai-assistant-mvp-design.md`
 
-- [ ] **Step 1: Write repository safety rules**
+- [x] **Step 1: Write repository safety rules**
 
 Create `.gitignore` with exact exclusions for IDE state, Java/Python build output, virtual environments, `.env`, logs, evaluation output, and local model credentials:
 
@@ -40,7 +40,7 @@ eval/report.json
 secrets/
 ```
 
-- [ ] **Step 2: Add a key-free configuration contract**
+- [x] **Step 2: Add a key-free configuration contract**
 
 Create `.env.example`:
 
@@ -54,7 +54,7 @@ LLM_MAX_RETRIES=2
 LLM_FALLBACK_ENABLED=true
 ```
 
-- [ ] **Step 3: Add the approved specification and README boundary**
+- [x] **Step 3: Add the approved specification and README boundary**
 
 The specification must state that all policies, projects, people, and work orders are synthetic. The README must lead with:
 
@@ -66,7 +66,7 @@ The specification must state that all policies, projects, people, and work order
 > 本仓库仅使用合成制度和虚构工单，与任何真实企业、客户或生产系统无关。
 ```
 
-- [ ] **Step 4: Commit the documentation baseline**
+- [x] **Step 4: Commit the documentation baseline**
 
 Run:
 
@@ -88,7 +88,7 @@ Expected: the first commit contains documentation only and `git status --short` 
 - Create: `apps/work-order-service/src/main/java/com/tangmeng/workorder/service/WorkOrderNotFoundException.java`
 - Test: `apps/work-order-service/src/test/java/com/tangmeng/workorder/service/WorkOrderQueryServiceTest.java`
 
-- [ ] **Step 1: Write the failing single-order and rework-chain tests**
+- [x] **Step 1: Write the failing single-order and rework-chain tests**
 
 ```java
 @ExtendWith(MockitoExtension.class)
@@ -119,7 +119,7 @@ class WorkOrderQueryServiceTest {
 }
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run:
 
@@ -130,7 +130,7 @@ mvn -f apps/work-order-service/pom.xml -Dtest=WorkOrderQueryServiceTest test
 
 Expected: compilation fails because the domain, mapper, and service types do not exist.
 
-- [ ] **Step 3: Implement the minimal domain and service**
+- [x] **Step 3: Implement the minimal domain and service**
 
 The service contract must be:
 
@@ -152,13 +152,13 @@ public class WorkOrderQueryService {
 
 `WorkOrderEntity` uses `work_order_no` as its string primary key and defines every public field from the design: title, description, project name, space path, type, priority, status, assignee, source, root work-order number, rework reason, created time, due time, and completed time.
 
-- [ ] **Step 4: Run the focused test and verify GREEN**
+- [x] **Step 4: Run the focused test and verify GREEN**
 
 Run the command from Step 2.
 
 Expected: `Tests run: 2, Failures: 0, Errors: 0`.
 
-- [ ] **Step 5: Commit the domain increment**
+- [x] **Step 5: Commit the domain increment**
 
 ```powershell
 git add apps/work-order-service
