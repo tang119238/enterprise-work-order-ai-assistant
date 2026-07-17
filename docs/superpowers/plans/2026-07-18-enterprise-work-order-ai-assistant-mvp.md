@@ -660,7 +660,7 @@ git status --short
 
 Expected: clean worktree.
 
-- [ ] **Step 5: Create and push the public GitHub repository**
+- [x] **Step 5: Create and push the public GitHub repository**
 
 When GitHub CLI is available and authenticated:
 
@@ -670,7 +670,7 @@ gh repo create enterprise-work-order-ai-assistant --public --source . --remote o
 
 If repository creation uses the signed-in GitHub web UI instead, add its HTTPS URL as `origin`, then run `git push -u origin main`. Confirm success only from the remote URL and push output.
 
-- [ ] **Step 6: Verify the published repository**
+- [x] **Step 6: Verify the published repository**
 
 Run:
 
