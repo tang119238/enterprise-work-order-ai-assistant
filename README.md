@@ -21,7 +21,7 @@
 前置条件：Docker Desktop 或 Docker Engine，且支持 Docker Compose v2。首次构建需要下载 Java、Python 和 PostgreSQL 基础镜像，建议为 Docker 分配至少 2 GB 内存。
 
 ```bash
-git clone <your-repository-url>
+git clone https://github.com/tang119238/enterprise-work-order-ai-assistant.git
 cd enterprise-work-order-ai-assistant
 docker compose up --build -d
 ```
