@@ -1,7 +1,7 @@
 # Enterprise Work Order AI Assistant MVP Design
 
-**Status:** Approved  
-**Date:** 2026-07-18  
+**Status:** Approved
+**Date:** 2026-07-18
 **Data boundary:** Synthetic demonstration content only
 
 ## Goal
@@ -103,4 +103,3 @@ Acceptance thresholds:
 - Tool selection and key arguments are correct for all 10 tool-query cases.
 - A clean machine can start the system with one Docker Compose command.
 - No secret, local path, or real business material is tracked.
-
