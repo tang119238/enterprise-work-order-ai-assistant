@@ -1,17 +1,39 @@
 package com.tangmeng.workorder.controller;
 
 import com.tangmeng.workorder.api.ApiError;
+import com.tangmeng.workorder.command.ActionNotPermittedException;
+import com.tangmeng.workorder.command.InvalidCommandException;
+import com.tangmeng.workorder.service.InvalidStateTransitionException;
 import com.tangmeng.workorder.service.WorkOrderNotFoundException;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler({InvalidCommandException.class, HttpMessageNotReadableException.class})
+    public ResponseEntity<ApiError> handleInvalidCommand(Exception exception) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+            .body(ApiError.of("INVALID_COMMAND", "Invalid command"));
+    }
+
+    @ExceptionHandler(ActionNotPermittedException.class)
+    public ResponseEntity<ApiError> handleActionNotPermitted(ActionNotPermittedException exception) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+            .body(ApiError.of(ActionNotPermittedException.ERROR_CODE, "Action not permitted"));
+    }
+
+    @ExceptionHandler(InvalidStateTransitionException.class)
+    public ResponseEntity<ApiError> handleInvalidTransition(InvalidStateTransitionException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ApiError.of(InvalidStateTransitionException.ERROR_CODE, "Invalid state transition"));
+    }
 
     @ExceptionHandler(WorkOrderNotFoundException.class)
     public ResponseEntity<ApiError> handleNotFound(WorkOrderNotFoundException exception) {

@@ -37,7 +37,12 @@ public class WorkOrderEntity {
     private String rootWorkOrderNo;
     private String reworkReason;
     private long version;
+    private LocalDateTime acceptedAt;
+    private UUID createdBy;
+    private UUID updatedBy;
     private LocalDateTime createdAt;
     private LocalDateTime dueAt;
     private LocalDateTime completedAt;
+    private LocalDateTime cancelledAt;
+    private String cancelReason;
 }
