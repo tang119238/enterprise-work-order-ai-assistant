@@ -27,4 +27,12 @@ class WorkOrderEventMapperMetadataTest {
             .map(field -> field.getTypeHandler().getSimpleName()))
             .containsExactlyInAnyOrder("JsonNodeTypeHandler", "JsonNodeTypeHandler");
     }
+
+    @Test
+    void mapperExposesInsertOnlyAndNoUpdateOrDeleteSurface() {
+        assertThat(java.util.Arrays.stream(WorkOrderEventMapper.class.getMethods())
+            .map(java.lang.reflect.Method::getName))
+            .contains("insert")
+            .noneMatch(name -> name.startsWith("update") || name.startsWith("delete"));
+    }
 }

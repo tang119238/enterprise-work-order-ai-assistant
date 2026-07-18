@@ -67,8 +67,14 @@ class WorkOrderCommandIntegrationTest {
         when(access.loadCurrentProjects(TENANT, "human")).thenReturn(Set.of(PROJECT));
         when(repository.findIdempotency(TENANT, WorkOrderCommandService.CONFIRM_OPERATION, "key"))
             .thenReturn(Optional.empty());
+        when(repository.reserveIdempotency(eq(TENANT), eq(WorkOrderCommandService.CONFIRM_OPERATION),
+            any(), any(), eq(NOW))).thenReturn(true);
         when(repository.claimProposal(TENANT, PROPOSAL, USER, NOW)).thenReturn(true);
         when(repository.updateWorkOrder(any(), eq(7L))).thenReturn(true);
+        when(repository.insertEvent(any())).thenReturn(1);
+        when(repository.insertOutbox(any(), any(), any(), any(), any())).thenReturn(1);
+        when(repository.insertAssignment(any(), any(), any(), any(), any(), any())).thenReturn(1);
+        when(repository.completeIdempotency(any(), any(), any(), any(), any(), any(Integer.class))).thenReturn(true);
         when(repository.markProposalExecuted(eq(TENANT), eq(PROPOSAL), any(), eq(NOW))).thenReturn(true);
     }
 
@@ -84,29 +90,52 @@ class WorkOrderCommandIntegrationTest {
         assertThat(response.status()).isEqualTo("PROCESSING");
         InOrder ordered = inOrder(repository);
         ordered.verify(repository).findIdempotency(TENANT, WorkOrderCommandService.CONFIRM_OPERATION, "key");
+        ordered.verify(repository).reserveIdempotency(eq(TENANT), eq(WorkOrderCommandService.CONFIRM_OPERATION),
+            eq("key"), any(), eq(NOW));
         ordered.verify(repository).findProposal(TENANT, PROPOSAL);
         ordered.verify(repository).claimProposal(TENANT, PROPOSAL, USER, NOW);
         ordered.verify(repository).updateWorkOrder(any(), eq(7L));
         ordered.verify(repository).insertEvent(any(WorkOrderEventEntity.class));
         ordered.verify(repository).insertOutbox(eq(TENANT), eq(TARGET), eq("WORK_ORDER_UPDATED"), any(), eq(NOW));
-        ordered.verify(repository).saveIdempotency(eq(TENANT), eq(WorkOrderCommandService.CONFIRM_OPERATION),
-            eq("key"), any(), any(), eq(200), eq(NOW));
+        ordered.verify(repository).completeIdempotency(eq(TENANT), eq(WorkOrderCommandService.CONFIRM_OPERATION),
+            eq("key"), any(), any(), eq(200));
         ordered.verify(repository).markProposalExecuted(eq(TENANT), eq(PROPOSAL), any(), eq(NOW));
     }
 
     @Test
     void replayReturnsStoredResponseWithoutClaimingOrWritingAgain() {
         ActionProposalEntity proposal = proposal("UPDATE", payload().put("title", "new title"));
+        proposal.setStatus("EXECUTED");
         WorkOrderExecutionResponse stored = new WorkOrderExecutionResponse(
             PROPOSAL, TARGET, "WO-1", "UPDATE", "PROCESSING", 8L);
         String hash = WorkOrderCommandService.requestHash(mapper, PROPOSAL, proposal.getCommandPayload());
         when(repository.findIdempotency(TENANT, WorkOrderCommandService.CONFIRM_OPERATION, "key"))
             .thenReturn(Optional.of(new WorkOrderCommandRepository.StoredIdempotency(
                 hash, mapper.valueToTree(stored), 200)));
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
+        when(repository.findWorkOrder(TENANT, TARGET, Set.of(PROJECT))).thenReturn(order("PROCESSING"));
 
         assertThat(service.execute(context("DISPATCHER"), proposal, "key")).isEqualTo(stored);
         verify(repository, never()).claimProposal(any(), any(), any(), any());
         verify(repository, never()).insertEvent(any());
+    }
+
+    @Test
+    void executedReplayRemainsAvailableAfterThePreExecutionExpiryTime() {
+        ActionProposalEntity proposal = proposal("UPDATE", payload().put("title", "new title"));
+        proposal.setStatus("EXECUTED");
+        proposal.setExpiresAt(NOW.minusMinutes(1));
+        WorkOrderExecutionResponse stored = new WorkOrderExecutionResponse(
+            PROPOSAL, TARGET, "WO-1", "UPDATE", "PROCESSING", 8L);
+        String hash = WorkOrderCommandService.requestHash(mapper, PROPOSAL, proposal.getCommandPayload());
+        when(repository.findIdempotency(TENANT, WorkOrderCommandService.CONFIRM_OPERATION, "key"))
+            .thenReturn(Optional.of(new WorkOrderCommandRepository.StoredIdempotency(
+                hash, mapper.valueToTree(stored), 200)));
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
+        when(repository.findWorkOrder(TENANT, TARGET, Set.of(PROJECT))).thenReturn(order("PROCESSING"));
+
+        assertThat(service.execute(context("DISPATCHER"), proposal, "key")).isEqualTo(stored);
+        verify(repository, never()).markProposalExpired(any(), any(), any());
     }
 
     @Test
@@ -132,6 +161,41 @@ class WorkOrderCommandIntegrationTest {
         assertThatThrownBy(() -> service.execute(context("AI_SERVICE"), proposal, "key"))
             .isInstanceOf(ActionNotPermittedException.class);
         verify(repository, never()).updateWorkOrder(any(), any(Long.class));
+        verify(repository, never()).markProposalFailed(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void replayRechecksCurrentAuthorityBeforeReturningStoredResponse() {
+        ActionProposalEntity proposal = proposal("UPDATE", payload().put("title", "new title"));
+        proposal.setStatus("EXECUTED");
+        WorkOrderExecutionResponse stored = new WorkOrderExecutionResponse(
+            PROPOSAL, TARGET, "WO-1", "UPDATE", "PROCESSING", 8L);
+        String hash = WorkOrderCommandService.requestHash(mapper, PROPOSAL, proposal.getCommandPayload());
+        when(repository.findIdempotency(TENANT, WorkOrderCommandService.CONFIRM_OPERATION, "key"))
+            .thenReturn(Optional.of(new WorkOrderCommandRepository.StoredIdempotency(
+                hash, mapper.valueToTree(stored), 200)));
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
+        when(access.loadCurrentRoles(TENANT, "human")).thenReturn(Set.of());
+
+        assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "key"))
+            .isInstanceOf(ActionNotPermittedException.class);
+        verify(repository, never()).markProposalFailed(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void incompleteSameHashIdempotencyRecordIsRejectedWithoutDeserializingNull() {
+        ActionProposalEntity proposal = proposal("UPDATE", payload().put("title", "new title"));
+        proposal.setStatus("EXECUTED");
+        String hash = WorkOrderCommandService.requestHash(mapper, PROPOSAL, proposal.getCommandPayload());
+        when(repository.findIdempotency(TENANT, WorkOrderCommandService.CONFIRM_OPERATION, "key"))
+            .thenReturn(Optional.of(new WorkOrderCommandRepository.StoredIdempotency(hash, null, 0)));
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
+        when(repository.findWorkOrder(TENANT, TARGET, Set.of(PROJECT))).thenReturn(order("PROCESSING"));
+
+        assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "key"))
+            .isInstanceOf(InvalidCommandException.class);
+        verify(repository, never()).claimProposal(any(), any(), any(), any());
+        verify(repository, never()).markProposalFailed(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -146,7 +210,7 @@ class WorkOrderCommandIntegrationTest {
             .isInstanceOfSatisfying(WorkOrderVersionConflictException.class,
                 conflict -> assertThat(conflict.getFreshPreview().get("version").asLong()).isEqualTo(9L));
         verify(repository, never()).updateWorkOrder(any(), any(Long.class));
-        verify(repository).markProposalFailed(TENANT, PROPOSAL, "WORK_ORDER_VERSION_CONFLICT", NOW);
+        verify(repository).markProposalFailed(TENANT, PROPOSAL, USER, "WORK_ORDER_VERSION_CONFLICT", NOW);
     }
 
     @Test
@@ -158,6 +222,42 @@ class WorkOrderCommandIntegrationTest {
         assertThatThrownBy(() -> service.execute(context("DISPATCHER"), expired, "key"))
             .isInstanceOf(ActionProposalExpiredException.class);
         verify(repository, never()).claimProposal(any(), any(), any(), any());
+    }
+
+    @Test
+    void alreadyExpiredProposalRemainsStableGoneOnRepeatedAttempts() {
+        ActionProposalEntity expired = proposal("UPDATE", payload().put("title", "new title"));
+        expired.setStatus("EXPIRED");
+        expired.setExpiresAt(NOW.minusMinutes(1));
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(expired);
+
+        for (String key : Set.of("expired-1", "expired-2")) {
+            when(repository.findIdempotency(TENANT, WorkOrderCommandService.CONFIRM_OPERATION, key))
+                .thenReturn(Optional.empty());
+            assertThatThrownBy(() -> service.execute(context("DISPATCHER"), expired, key))
+                .isInstanceOf(ActionProposalExpiredException.class);
+        }
+        verify(repository, never()).markProposalFailed(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void zeroRowUpdateReloadsCurrentDatabaseRowForFreshConflictPreview() {
+        ActionProposalEntity proposal = proposal("UPDATE", payload().put("title", "new title"));
+        WorkOrderEntity stale = order("PROCESSING");
+        WorkOrderEntity fresh = order("PROCESSING");
+        fresh.setVersion(8L);
+        fresh.setTitle("concurrent title");
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
+        when(repository.findWorkOrder(TENANT, TARGET, Set.of(PROJECT))).thenReturn(stale, stale, fresh);
+        when(repository.updateWorkOrder(any(), eq(7L))).thenReturn(false);
+
+        assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "key"))
+            .isInstanceOfSatisfying(WorkOrderVersionConflictException.class, conflict -> {
+                assertThat(conflict.getFreshPreview().get("version").asLong()).isEqualTo(9L);
+                assertThat(conflict.getFreshPreview().get("title").asText()).isEqualTo("new title");
+            });
+        verify(repository, org.mockito.Mockito.atLeast(2))
+            .findWorkOrder(TENANT, TARGET, Set.of(PROJECT));
     }
 
     static Stream<Arguments> targetActions() {
@@ -220,7 +320,7 @@ class WorkOrderCommandIntegrationTest {
         when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
         when(repository.findProject(TENANT, PROJECT, Set.of(PROJECT))).thenReturn(
             ProjectEntity.builder().id(PROJECT).tenantId(TENANT).name("P").status("ACTIVE").build());
-        when(repository.insertWorkOrder(any())).thenReturn(true);
+        when(repository.insertWorkOrder(any())).thenReturn(WorkOrderCommandRepository.InsertWorkOrderResult.INSERTED);
 
         WorkOrderExecutionResponse response = service.execute(context("DISPATCHER"), proposal, "key");
 
@@ -232,18 +332,109 @@ class WorkOrderCommandIntegrationTest {
     }
 
     @Test
+    void duplicateCreateReturnsConflictFromFreshDatabaseRowButOtherIntegrityFailuresAreInvalid() throws Exception {
+        ObjectNode command = (ObjectNode) mapper.readTree("""
+            {"work_order_no":"WO-DUP","title":"new","description":"d",
+             "project_id":"00000000-0000-0000-0000-000000010001","project_name":"P",
+             "space_path":"S","order_type":"REPAIR","priority":"HIGH","source":"MANUAL",
+             "due_at":"2026-07-19T02:00:00"}
+            """);
+        ActionProposalEntity proposal = proposal("CREATE", command);
+        proposal.setTargetId(null);
+        proposal.setExpectedVersion(0L);
+        proposal.setAfterSnapshot(mapper.createObjectNode().put("id", TARGET.toString()));
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
+        when(repository.findProject(TENANT, PROJECT, Set.of(PROJECT))).thenReturn(
+            ProjectEntity.builder().id(PROJECT).tenantId(TENANT).name("P").status("ACTIVE").build());
+        when(repository.insertWorkOrder(any())).thenReturn(WorkOrderCommandRepository.InsertWorkOrderResult.DUPLICATE);
+        WorkOrderEntity duplicate = order("PROCESSING");
+        duplicate.setVersion(4L);
+        duplicate.setWorkOrderNo("WO-DUP");
+        when(repository.findWorkOrderByIdentity(TENANT, TARGET, "WO-DUP", Set.of(PROJECT)))
+            .thenReturn(duplicate);
+
+        assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "key"))
+            .isInstanceOfSatisfying(WorkOrderVersionConflictException.class, conflict ->
+                assertThat(conflict.getFreshPreview().get("version").asLong()).isEqualTo(4L));
+
+        when(repository.insertWorkOrder(any())).thenReturn(WorkOrderCommandRepository.InsertWorkOrderResult.INVALID);
+        assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "other-key"))
+            .isInstanceOf(InvalidCommandException.class);
+    }
+
+    @Test
+    void uniqueReservationRaceRereadsCompletedSameHashResponse() {
+        ActionProposalEntity proposal = proposal("UPDATE", payload().put("title", "new title"));
+        proposal.setStatus("EXECUTED");
+        WorkOrderExecutionResponse stored = new WorkOrderExecutionResponse(
+            PROPOSAL, TARGET, "WO-1", "UPDATE", "PROCESSING", 8L);
+        String hash = WorkOrderCommandService.requestHash(mapper, PROPOSAL, proposal.getCommandPayload());
+        when(repository.findIdempotency(TENANT, WorkOrderCommandService.CONFIRM_OPERATION, "race-key"))
+            .thenReturn(Optional.empty(), Optional.of(new WorkOrderCommandRepository.StoredIdempotency(
+                hash, mapper.valueToTree(stored), 200)));
+        when(repository.reserveIdempotency(TENANT, WorkOrderCommandService.CONFIRM_OPERATION,
+            "race-key", hash, NOW)).thenReturn(false);
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
+        when(repository.findWorkOrder(TENANT, TARGET, Set.of(PROJECT))).thenReturn(order("PROCESSING"));
+
+        assertThat(service.execute(context("DISPATCHER"), proposal, "race-key")).isEqualTo(stored);
+        verify(repository, never()).claimProposal(any(), any(), any(), any());
+    }
+
+    @Test
+    void everyReliabilityWriteChecksItsAffectedRowCount() {
+        ActionProposalEntity proposal = proposal("UPDATE", payload().put("title", "new title"));
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
+        when(repository.findWorkOrder(TENANT, TARGET, Set.of(PROJECT))).thenReturn(order("PROCESSING"));
+
+        when(repository.insertEvent(any())).thenReturn(0);
+        assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "event-key"))
+            .isInstanceOf(InvalidCommandException.class);
+
+        when(repository.insertEvent(any())).thenReturn(1);
+        when(repository.insertOutbox(any(), any(), any(), any(), any())).thenReturn(0);
+        assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "outbox-key"))
+            .isInstanceOf(InvalidCommandException.class);
+
+        when(repository.insertOutbox(any(), any(), any(), any(), any())).thenReturn(1);
+        when(repository.completeIdempotency(any(), any(), any(), any(), any(), any(Integer.class))).thenReturn(false);
+        assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "idem-key"))
+            .isInstanceOf(IllegalStateException.class).hasMessage("Idempotency completion failed");
+    }
+
+    @Test
+    void assignmentChangeRejectsUnexpectedCloseAndInsertCounts() throws Exception {
+        ActionProposalEntity proposal = proposal("ASSIGN", (ObjectNode) mapper.readTree("""
+            {"target_work_order_no":"WO-1","assignee_id":"00000000-0000-0000-0000-000000009001",
+             "assignee_name":"Human","reason":"dispatch"}
+            """));
+        WorkOrderEntity current = order("PENDING_DISPATCH");
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
+        when(repository.findWorkOrder(TENANT, TARGET, Set.of(PROJECT))).thenReturn(current);
+        when(repository.closeOpenAssignment(TENANT, TARGET, NOW)).thenReturn(2);
+
+        assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "close-key"))
+            .isInstanceOf(InvalidCommandException.class);
+
+        when(repository.closeOpenAssignment(TENANT, TARGET, NOW)).thenReturn(0);
+        when(repository.insertAssignment(TENANT, TARGET, USER, "dispatch", USER, NOW)).thenReturn(0);
+        assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "assignment-key"))
+            .isInstanceOf(InvalidCommandException.class);
+    }
+
+    @Test
     void eventFailureStopsOutboxIdempotencyAndCompletionThenUsesRecoveryTransaction() {
         ActionProposalEntity proposal = proposal("UPDATE", payload().put("title", "new title"));
         when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
         when(repository.findWorkOrder(TENANT, TARGET, Set.of(PROJECT))).thenReturn(order("PROCESSING"));
-        doThrow(new IllegalStateException("forced event failure")).when(repository).insertEvent(any());
+        when(repository.insertEvent(any())).thenThrow(new IllegalStateException("forced event failure"));
 
         assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "key"))
             .isInstanceOf(IllegalStateException.class).hasMessage("forced event failure");
         verify(repository, never()).insertOutbox(any(), any(), any(), any(), any());
-        verify(repository, never()).saveIdempotency(any(), any(), any(), any(), any(), any(Integer.class), any());
+        verify(repository, never()).completeIdempotency(any(), any(), any(), any(), any(), any(Integer.class));
         verify(repository, never()).markProposalExecuted(any(), any(), any(), any());
-        verify(repository).markProposalFailed(TENANT, PROPOSAL, "INTERNAL_ERROR", NOW);
+        verify(repository).markProposalFailed(TENANT, PROPOSAL, USER, "INTERNAL_ERROR", NOW);
     }
 
     @Test
@@ -276,7 +467,7 @@ class WorkOrderCommandIntegrationTest {
             .isInstanceOf(InvalidStateTransitionException.class)
             .hasMessage("INVALID_STATE_TRANSITION");
         verify(repository, never()).insertEvent(any());
-        verify(repository).markProposalFailed(TENANT, PROPOSAL, "INVALID_STATE_TRANSITION", NOW);
+        verify(repository).markProposalFailed(TENANT, PROPOSAL, USER, "INVALID_STATE_TRANSITION", NOW);
     }
 
     @Test

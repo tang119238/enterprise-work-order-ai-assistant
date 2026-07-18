@@ -14,6 +14,7 @@ import com.tangmeng.workorder.mapper.WorkOrderEventMapper;
 import com.tangmeng.workorder.mapper.WorkOrderMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -42,8 +43,19 @@ public class JdbcWorkOrderCommandRepository implements WorkOrderCommandRepositor
             where tenant_id = ? and operation = ? and idempotency_key = ?
             """, (rs, row) -> new StoredIdempotency(
                 rs.getString("request_hash"), readJson(rs.getString("response_payload")),
-                rs.getInt("status_code")), tenantId, operation, key);
+                rs.getObject("status_code", Integer.class)), tenantId, operation, key);
         return rows.stream().findFirst();
+    }
+
+    @Override
+    public boolean reserveIdempotency(UUID tenantId, String operation, String key,
+                                      String requestHash, LocalDateTime now) {
+        return jdbc.update("""
+            insert into idempotency_record
+              (id,tenant_id,operation,idempotency_key,request_hash,created_at,expires_at)
+            values (?,?,?,?,?,?,?)
+            on conflict (tenant_id,operation,idempotency_key) do nothing
+            """, UUID.randomUUID(), tenantId, operation, key, requestHash, now, now.plusDays(1)) == 1;
     }
 
     @Override
@@ -80,11 +92,25 @@ public class JdbcWorkOrderCommandRepository implements WorkOrderCommandRepositor
     }
 
     @Override
-    public boolean insertWorkOrder(WorkOrderEntity order) {
+    public WorkOrderEntity findWorkOrderByIdentity(UUID tenantId, UUID workOrderId, String workOrderNo,
+                                                   Set<UUID> authorizedProjects) {
+        if (authorizedProjects.isEmpty()) return null;
+        return workOrderMapper.selectOne(Wrappers.<WorkOrderEntity>lambdaQuery()
+            .eq(WorkOrderEntity::getTenantId, tenantId)
+            .in(WorkOrderEntity::getProjectId, authorizedProjects)
+            .and(identity -> identity.eq(WorkOrderEntity::getId, workOrderId)
+                .or().eq(WorkOrderEntity::getWorkOrderNo, workOrderNo)));
+    }
+
+    @Override
+    public InsertWorkOrderResult insertWorkOrder(WorkOrderEntity order) {
         try {
-            return workOrderMapper.insert(order) == 1;
+            return workOrderMapper.insert(order) == 1 ? InsertWorkOrderResult.INSERTED
+                : InsertWorkOrderResult.INVALID;
+        } catch (DuplicateKeyException exception) {
+            return InsertWorkOrderResult.DUPLICATE;
         } catch (DataIntegrityViolationException exception) {
-            return false;
+            return InsertWorkOrderResult.INVALID;
         }
     }
 
@@ -102,17 +128,17 @@ public class JdbcWorkOrderCommandRepository implements WorkOrderCommandRepositor
     }
 
     @Override
-    public void closeOpenAssignment(UUID tenantId, UUID workOrderId, LocalDateTime now) {
-        jdbc.update("""
+    public int closeOpenAssignment(UUID tenantId, UUID workOrderId, LocalDateTime now) {
+        return jdbc.update("""
             update work_order_assignment set unassigned_at = ?
             where tenant_id = ? and work_order_id = ? and unassigned_at is null
             """, now, tenantId, workOrderId);
     }
 
     @Override
-    public void insertAssignment(UUID tenantId, UUID workOrderId, UUID assigneeId,
+    public int insertAssignment(UUID tenantId, UUID workOrderId, UUID assigneeId,
                                  String reason, UUID actorId, LocalDateTime now) {
-        jdbc.update("""
+        return jdbc.update("""
             insert into work_order_assignment
               (id,tenant_id,work_order_id,assignee_id,assigned_at,reason,created_by,created_at)
             values (?,?,?,?,?,?,?,?)
@@ -120,14 +146,14 @@ public class JdbcWorkOrderCommandRepository implements WorkOrderCommandRepositor
     }
 
     @Override
-    public void insertEvent(WorkOrderEventEntity event) {
-        if (eventMapper.insert(event) != 1) throw new IllegalStateException("Event insert failed");
+    public int insertEvent(WorkOrderEventEntity event) {
+        return eventMapper.insert(event);
     }
 
     @Override
-    public void insertOutbox(UUID tenantId, UUID aggregateId, String eventType,
+    public int insertOutbox(UUID tenantId, UUID aggregateId, String eventType,
                              JsonNode payload, LocalDateTime now) {
-        jdbc.update("""
+        return jdbc.update("""
             insert into outbox_event
               (id,tenant_id,aggregate_id,aggregate_type,event_type,payload,status,occurred_at,available_at)
             values (?,?,?,'WORK_ORDER',?,?::jsonb,'PENDING',?,?)
@@ -135,14 +161,13 @@ public class JdbcWorkOrderCommandRepository implements WorkOrderCommandRepositor
     }
 
     @Override
-    public void saveIdempotency(UUID tenantId, String operation, String key, String requestHash,
-                                JsonNode response, int statusCode, LocalDateTime now) {
-        jdbc.update("""
-            insert into idempotency_record
-              (id,tenant_id,operation,idempotency_key,request_hash,response_payload,status_code,created_at,expires_at)
-            values (?,?,?,?,?,?::jsonb,?,?,?)
-            """, UUID.randomUUID(), tenantId, operation, key, requestHash, writeJson(response),
-            statusCode, now, now.plusDays(1));
+    public boolean completeIdempotency(UUID tenantId, String operation, String key, String requestHash,
+                                       JsonNode response, int statusCode) {
+        return jdbc.update("""
+            update idempotency_record set response_payload=?::jsonb,status_code=?
+            where tenant_id=? and operation=? and idempotency_key=? and request_hash=?
+              and response_payload is null and status_code is null
+            """, writeJson(response), statusCode, tenantId, operation, key, requestHash) == 1;
     }
 
     @Override
@@ -155,11 +180,12 @@ public class JdbcWorkOrderCommandRepository implements WorkOrderCommandRepositor
     }
 
     @Override
-    public void markProposalFailed(UUID tenantId, UUID proposalId, String errorCode, LocalDateTime now) {
-        jdbc.update("""
-            update action_proposal set status='FAILED', error_code=?, updated_at=?
+    public boolean markProposalFailed(UUID tenantId, UUID proposalId, UUID actorId,
+                                      String errorCode, LocalDateTime now) {
+        return jdbc.update("""
+            update action_proposal set status='FAILED', confirmed_by=?, error_code=?, updated_at=?
             where tenant_id=? and id=? and status in ('PENDING_CONFIRMATION','CONFIRMED','EXECUTING')
-            """, errorCode, now, tenantId, proposalId);
+            """, actorId, errorCode, now, tenantId, proposalId) == 1;
     }
 
     @Override
@@ -171,11 +197,11 @@ public class JdbcWorkOrderCommandRepository implements WorkOrderCommandRepositor
     }
 
     @Override
-    public void markProposalExpired(UUID tenantId, UUID proposalId, LocalDateTime now) {
-        jdbc.update("""
+    public boolean markProposalExpired(UUID tenantId, UUID proposalId, LocalDateTime now) {
+        return jdbc.update("""
             update action_proposal set status='EXPIRED', error_code='ACTION_PROPOSAL_EXPIRED', updated_at=?
-            where tenant_id=? and id=? and status='PENDING_CONFIRMATION' and expires_at<=?
-            """, now, tenantId, proposalId, now);
+            where tenant_id=? and id=? and status in ('PENDING_CONFIRMATION','CONFIRMED') and expires_at<=?
+            """, now, tenantId, proposalId, now) == 1;
     }
 
     private JsonNode readJson(String value) {

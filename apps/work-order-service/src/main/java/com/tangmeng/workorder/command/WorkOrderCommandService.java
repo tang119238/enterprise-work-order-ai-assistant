@@ -62,16 +62,19 @@ public class WorkOrderCommandService {
         String key = idempotencyKey.strip();
         if (key.length() > 200) throw new InvalidCommandException();
         String hash = requestHash(objectMapper, proposal.getId(), proposal.getCommandPayload());
+        ExecutionAttempt attempt = new ExecutionAttempt(proposal.getId());
         try {
             return transactions.required(context,
-                () -> executeInside(context, proposal.getId(), key, hash));
+                () -> executeInside(context, proposal.getId(), key, hash, attempt));
         } catch (ActionProposalExpiredException exception) {
             recoverExpired(context, proposal.getId());
             throw exception;
         } catch (IdempotencyConflictException exception) {
             throw exception;
         } catch (RuntimeException exception) {
-            recoverFailure(context, proposal.getId(), errorCode(exception));
+            if (attempt.recoverable()) {
+                recoverFailure(context, attempt, errorCode(exception));
+            }
             throw exception;
         }
     }
@@ -84,10 +87,11 @@ public class WorkOrderCommandService {
         try {
             return transactions.required(context, () -> {
                 LocalDateTime now = now();
-                ActionProposalEntity proposal = requireProposal(context, proposalId);
+                ActionProposalEntity proposal = requireProposalRecord(context, proposalId);
                 CurrentAuthority authority = currentAuthority(context);
                 authorize(context, proposal, authority.roles(), authority.projects());
-                if (!proposal.getExpiresAt().isAfter(now)) throw new ActionProposalExpiredException();
+                if (isExpired(proposal, now)) throw new ActionProposalExpiredException();
+                requireEligible(proposal);
                 recheckTargetAccess(context, proposal, authority.projects());
                 if (!repository.rejectProposal(context.tenantId(), proposalId, context.userId(), now)) {
                     throw new InvalidCommandException();
@@ -104,38 +108,45 @@ public class WorkOrderCommandService {
         TenantContext context,
         UUID proposalId,
         String key,
-        String hash
+        String hash,
+        ExecutionAttempt attempt
     ) {
-        Optional<WorkOrderCommandRepository.StoredIdempotency> replay =
-            repository.findIdempotency(context.tenantId(), CONFIRM_OPERATION, key);
-        if (replay.isPresent()) return replay(replay.get(), hash);
-
         LocalDateTime now = now();
-        ActionProposalEntity proposal = requireProposal(context, proposalId);
-        if (!proposal.getExpiresAt().isAfter(now)) throw new ActionProposalExpiredException();
+        Optional<WorkOrderCommandRepository.StoredIdempotency> stored =
+            repository.findIdempotency(context.tenantId(), CONFIRM_OPERATION, key);
+        if (stored.isEmpty()
+            && !repository.reserveIdempotency(context.tenantId(), CONFIRM_OPERATION, key, hash, now)) {
+            stored = repository.findIdempotency(context.tenantId(), CONFIRM_OPERATION, key);
+            if (stored.isEmpty()) throw new InvalidCommandException();
+        }
+        if (stored.isPresent()) assertMatchingHash(stored.get(), hash);
+
+        ActionProposalEntity proposal = requireProposalRecord(context, proposalId);
+        if (isExpired(proposal, now)) throw new ActionProposalExpiredException();
         CurrentAuthority authority = currentAuthority(context);
         authorize(context, proposal, authority.roles(), authority.projects());
+        loadAuthorizedTarget(context, proposal, authority.projects());
+        attempt.authorized(context.userId());
 
-        if (!repository.claimProposal(context.tenantId(), proposalId, context.userId(), now)) {
-            Optional<WorkOrderCommandRepository.StoredIdempotency> afterRace =
-                repository.findIdempotency(context.tenantId(), CONFIRM_OPERATION, key);
-            if (afterRace.isPresent()) return replay(afterRace.get(), hash);
-            throw new InvalidCommandException();
+        if (stored.isPresent()) {
+            return replay(stored.get(), hash);
         }
 
-        WorkOrderEntity current = null;
-        ProjectEntity project = null;
+        requireEligible(proposal);
+
+        if (!repository.claimProposal(context.tenantId(), proposalId, context.userId(), now)) {
+            throw new InvalidCommandException();
+        }
+        attempt.claimed();
+
+        AuthorizedTarget facts = loadAuthorizedTarget(context, proposal, authority.projects());
+        WorkOrderEntity current = facts.workOrder();
+        ProjectEntity project = facts.project();
         if ("CREATE".equals(proposal.getActionType())) {
-            UUID projectId = requiredUuid(proposal.getCommandPayload(), "project_id", "projectId");
-            project = repository.findProject(context.tenantId(), projectId, authority.projects());
-            if (project == null) throw new WorkOrderNotFoundException(text(proposal.getCommandPayload(), "work_order_no", "workOrderNo"));
             if (!Objects.equals(proposal.getExpectedVersion(), 0L)) {
                 throw new WorkOrderVersionConflictException(proposal.getAfterSnapshot());
             }
         } else {
-            current = repository.findWorkOrder(context.tenantId(), proposal.getTargetId(), authority.projects());
-            if (current == null) throw new WorkOrderNotFoundException("hidden");
-            requireSelfAssignment(context, proposal.getActionType(), current);
             if (!Objects.equals(proposal.getExpectedVersion(), current.getVersion())) {
                 throw new WorkOrderVersionConflictException(preview(context, current, proposal, now));
             }
@@ -145,17 +156,31 @@ public class WorkOrderCommandService {
         WorkOrderEntity changed = current == null
             ? createOrder(context, proposal, project, now)
             : apply(context, current, proposal, now);
-        boolean persisted = current == null
-            ? repository.insertWorkOrder(changed)
-            : repository.updateWorkOrder(changed, current.getVersion());
-        if (!persisted) throw new WorkOrderVersionConflictException(
-            current == null ? proposal.getAfterSnapshot() : preview(context, current, proposal, now));
+        if (current == null) {
+            WorkOrderCommandRepository.InsertWorkOrderResult result = repository.insertWorkOrder(changed);
+            if (result == WorkOrderCommandRepository.InsertWorkOrderResult.DUPLICATE) {
+                WorkOrderEntity duplicate = repository.findWorkOrderByIdentity(
+                    context.tenantId(), changed.getId(), changed.getWorkOrderNo(), authority.projects());
+                if (duplicate == null) throw new InvalidCommandException();
+                throw new WorkOrderVersionConflictException(snapshot(duplicate));
+            }
+            if (result != WorkOrderCommandRepository.InsertWorkOrderResult.INSERTED) {
+                throw new InvalidCommandException();
+            }
+        } else if (!repository.updateWorkOrder(changed, current.getVersion())) {
+            WorkOrderEntity fresh = repository.findWorkOrder(
+                context.tenantId(), current.getId(), authority.projects());
+            if (fresh == null) throw new WorkOrderNotFoundException("hidden");
+            throw new WorkOrderVersionConflictException(freshConflictPreview(context, fresh, proposal, now));
+        }
 
         if (current != null && !Objects.equals(current.getAssigneeId(), changed.getAssigneeId())) {
-            repository.closeOpenAssignment(context.tenantId(), changed.getId(), now);
+            int closed = repository.closeOpenAssignment(context.tenantId(), changed.getId(), now);
+            int expectedClosed = current.getAssigneeId() == null ? 0 : 1;
+            if (closed != expectedClosed) throw new InvalidCommandException();
             if (changed.getAssigneeId() != null) {
-                repository.insertAssignment(context.tenantId(), changed.getId(), changed.getAssigneeId(),
-                    text(proposal.getCommandPayload(), "reason"), context.userId(), now);
+                requireOne(repository.insertAssignment(context.tenantId(), changed.getId(), changed.getAssigneeId(),
+                    text(proposal.getCommandPayload(), "reason"), context.userId(), now));
             }
         }
 
@@ -171,18 +196,21 @@ public class WorkOrderCommandService {
             case "CANCEL" -> "WORK_ORDER_CANCELLED";
             default -> throw new InvalidCommandException();
         };
-        repository.insertEvent(WorkOrderEventEntity.builder()
+        requireOne(repository.insertEvent(WorkOrderEventEntity.builder()
             .id(UUID.randomUUID()).tenantId(context.tenantId()).workOrderId(changed.getId())
             .eventType(eventType).commandType(proposal.getActionType())
             .beforeSnapshot(before).afterSnapshot(after).actorId(context.userId())
-            .requestId(context.requestId()).traceId(context.traceId()).createdAt(now).build());
-        repository.insertOutbox(context.tenantId(), changed.getId(), eventType, after, now);
+            .requestId(context.requestId()).traceId(context.traceId()).createdAt(now).build()));
+        requireOne(repository.insertOutbox(context.tenantId(), changed.getId(), eventType, after, now));
 
         WorkOrderExecutionResponse response = new WorkOrderExecutionResponse(
             proposalId, changed.getId(), changed.getWorkOrderNo(), proposal.getActionType(),
             changed.getStatus(), changed.getVersion());
         JsonNode responseJson = objectMapper.valueToTree(response);
-        repository.saveIdempotency(context.tenantId(), CONFIRM_OPERATION, key, hash, responseJson, 200, now);
+        if (!repository.completeIdempotency(
+            context.tenantId(), CONFIRM_OPERATION, key, hash, responseJson, 200)) {
+            throw new IllegalStateException("Idempotency completion failed");
+        }
         if (!repository.markProposalExecuted(context.tenantId(), proposalId, responseJson, now)) {
             throw new IllegalStateException("Proposal completion failed");
         }
@@ -214,22 +242,40 @@ public class WorkOrderCommandService {
         if (projects.isEmpty()) throw new WorkOrderNotFoundException("hidden");
     }
 
-    private ActionProposalEntity requireProposal(TenantContext context, UUID proposalId) {
+    private ActionProposalEntity requireProposalRecord(TenantContext context, UUID proposalId) {
         ActionProposalEntity proposal = repository.findProposal(context.tenantId(), proposalId);
         if (proposal == null || !context.tenantId().equals(proposal.getTenantId())) {
             throw new WorkOrderNotFoundException("proposal");
         }
-        if (!Set.of("PENDING_CONFIRMATION", "CONFIRMED").contains(proposal.getStatus())) {
-            throw new InvalidCommandException();
-        }
         return proposal;
     }
 
+    private void requireEligible(ActionProposalEntity proposal) {
+        if (!Set.of("PENDING_CONFIRMATION", "CONFIRMED").contains(proposal.getStatus())) {
+            throw new InvalidCommandException();
+        }
+    }
+
+    private boolean isExpired(ActionProposalEntity proposal, LocalDateTime now) {
+        return "EXPIRED".equals(proposal.getStatus())
+            || (Set.of("PENDING_CONFIRMATION", "CONFIRMED").contains(proposal.getStatus())
+                && (proposal.getExpiresAt() == null || !proposal.getExpiresAt().isAfter(now)));
+    }
+
     private WorkOrderExecutionResponse replay(WorkOrderCommandRepository.StoredIdempotency stored, String hash) {
-        if (!MessageDigest.isEqual(stored.requestHash().getBytes(StandardCharsets.UTF_8),
-            hash.getBytes(StandardCharsets.UTF_8))) throw new IdempotencyConflictException();
+        assertMatchingHash(stored, hash);
+        if (stored.responsePayload() == null || stored.statusCode() == null || stored.statusCode() != 200) {
+            throw new InvalidCommandException();
+        }
         try { return objectMapper.treeToValue(stored.responsePayload(), WorkOrderExecutionResponse.class); }
-        catch (JsonProcessingException exception) { throw new IllegalStateException(exception); }
+        catch (JsonProcessingException | IllegalArgumentException exception) { throw new InvalidCommandException(exception); }
+    }
+
+    private void assertMatchingHash(WorkOrderCommandRepository.StoredIdempotency stored, String hash) {
+        if (stored.requestHash() == null || !MessageDigest.isEqual(
+            stored.requestHash().getBytes(StandardCharsets.UTF_8), hash.getBytes(StandardCharsets.UTF_8))) {
+            throw new IdempotencyConflictException();
+        }
     }
 
     private WorkOrderEntity createOrder(TenantContext context, ActionProposalEntity proposal,
@@ -299,6 +345,33 @@ public class WorkOrderCommandService {
         catch (InvalidStateTransitionException | InvalidCommandException exception) { throw exception; }
     }
 
+    private JsonNode freshConflictPreview(TenantContext context, WorkOrderEntity fresh,
+                                          ActionProposalEntity proposal, LocalDateTime now) {
+        try {
+            return preview(context, fresh, proposal, now);
+        } catch (InvalidStateTransitionException | InvalidCommandException exception) {
+            return snapshot(fresh);
+        }
+    }
+
+    private AuthorizedTarget loadAuthorizedTarget(TenantContext context, ActionProposalEntity proposal,
+                                                  Set<UUID> projects) {
+        if ("CREATE".equals(proposal.getActionType())) {
+            UUID projectId = requiredUuid(proposal.getCommandPayload(), "project_id", "projectId");
+            ProjectEntity project = repository.findProject(context.tenantId(), projectId, projects);
+            if (project == null) {
+                throw new WorkOrderNotFoundException(
+                    text(proposal.getCommandPayload(), "work_order_no", "workOrderNo"));
+            }
+            return new AuthorizedTarget(project, null);
+        }
+        WorkOrderEntity current = repository.findWorkOrder(
+            context.tenantId(), proposal.getTargetId(), projects);
+        if (current == null) throw new WorkOrderNotFoundException("hidden");
+        requireSelfAssignment(context, proposal.getActionType(), current);
+        return new AuthorizedTarget(null, current);
+    }
+
     private void recheckTargetAccess(TenantContext context, ActionProposalEntity proposal, Set<UUID> projects) {
         if ("CREATE".equals(proposal.getActionType())) {
             UUID projectId = requiredUuid(proposal.getCommandPayload(), "project_id", "projectId");
@@ -322,9 +395,19 @@ public class WorkOrderCommandService {
         catch (RuntimeException ignored) { }
     }
 
-    private void recoverFailure(TenantContext context, UUID proposalId, String code) {
-        try { transactions.required(context, () -> { repository.markProposalFailed(context.tenantId(), proposalId, code, now()); return null; }); }
+    private void recoverFailure(TenantContext context, ExecutionAttempt attempt, String code) {
+        try { transactions.required(context, () -> {
+            if (!repository.markProposalFailed(
+                context.tenantId(), attempt.proposalId(), attempt.actorId(), code, now())) {
+                throw new IllegalStateException("Proposal failure recovery was not recorded");
+            }
+            return null;
+        }); }
         catch (RuntimeException ignored) { }
+    }
+
+    private static void requireOne(int affectedRows) {
+        if (affectedRows != 1) throw new InvalidCommandException();
     }
 
     private String errorCode(RuntimeException exception) {
@@ -399,4 +482,19 @@ public class WorkOrderCommandService {
     private static void put(ObjectNode n,String k,Object v){ if(v instanceof UUID u)n.put(k,u.toString()); else if(v instanceof String s)n.put(k,s); else if(v instanceof LocalDateTime d)n.put(k,d.toString()); }
     private LocalDateTime now() { return LocalDateTime.ofInstant(clock.instant(), ZoneOffset.UTC); }
     private record CurrentAuthority(Set<String> roles, Set<UUID> projects) { }
+    private record AuthorizedTarget(ProjectEntity project, WorkOrderEntity workOrder) { }
+
+    private static final class ExecutionAttempt {
+        private final UUID proposalId;
+        private UUID actorId;
+        private boolean authorized;
+        private boolean claimed;
+
+        private ExecutionAttempt(UUID proposalId) { this.proposalId = proposalId; }
+        private void authorized(UUID actorId) { this.actorId = actorId; this.authorized = true; }
+        private void claimed() { this.claimed = true; }
+        private boolean recoverable() { return authorized && claimed && actorId != null; }
+        private UUID proposalId() { return proposalId; }
+        private UUID actorId() { return actorId; }
+    }
 }

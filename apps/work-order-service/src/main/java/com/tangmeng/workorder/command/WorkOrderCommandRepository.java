@@ -13,25 +13,31 @@ import java.util.UUID;
 
 public interface WorkOrderCommandRepository {
 
-    record StoredIdempotency(String requestHash, JsonNode responsePayload, int statusCode) { }
+    record StoredIdempotency(String requestHash, JsonNode responsePayload, Integer statusCode) { }
+    enum InsertWorkOrderResult { INSERTED, DUPLICATE, INVALID }
 
     Optional<StoredIdempotency> findIdempotency(UUID tenantId, String operation, String key);
+    boolean reserveIdempotency(UUID tenantId, String operation, String key, String requestHash,
+                               LocalDateTime now);
     ActionProposalEntity findProposal(UUID tenantId, UUID proposalId);
     boolean claimProposal(UUID tenantId, UUID proposalId, UUID actorId, LocalDateTime now);
     ProjectEntity findProject(UUID tenantId, UUID projectId, Set<UUID> authorizedProjects);
     WorkOrderEntity findWorkOrder(UUID tenantId, UUID workOrderId, Set<UUID> authorizedProjects);
-    boolean insertWorkOrder(WorkOrderEntity order);
+    WorkOrderEntity findWorkOrderByIdentity(UUID tenantId, UUID workOrderId, String workOrderNo,
+                                            Set<UUID> authorizedProjects);
+    InsertWorkOrderResult insertWorkOrder(WorkOrderEntity order);
     boolean updateWorkOrder(WorkOrderEntity order, long expectedVersion);
-    void closeOpenAssignment(UUID tenantId, UUID workOrderId, LocalDateTime now);
-    void insertAssignment(UUID tenantId, UUID workOrderId, UUID assigneeId,
+    int closeOpenAssignment(UUID tenantId, UUID workOrderId, LocalDateTime now);
+    int insertAssignment(UUID tenantId, UUID workOrderId, UUID assigneeId,
                           String reason, UUID actorId, LocalDateTime now);
-    void insertEvent(WorkOrderEventEntity event);
-    void insertOutbox(UUID tenantId, UUID aggregateId, String eventType,
+    int insertEvent(WorkOrderEventEntity event);
+    int insertOutbox(UUID tenantId, UUID aggregateId, String eventType,
                       JsonNode payload, LocalDateTime now);
-    void saveIdempotency(UUID tenantId, String operation, String key, String requestHash,
-                         JsonNode response, int statusCode, LocalDateTime now);
+    boolean completeIdempotency(UUID tenantId, String operation, String key, String requestHash,
+                                JsonNode response, int statusCode);
     boolean markProposalExecuted(UUID tenantId, UUID proposalId, JsonNode response, LocalDateTime now);
-    void markProposalFailed(UUID tenantId, UUID proposalId, String errorCode, LocalDateTime now);
+    boolean markProposalFailed(UUID tenantId, UUID proposalId, UUID actorId,
+                               String errorCode, LocalDateTime now);
     boolean rejectProposal(UUID tenantId, UUID proposalId, UUID actorId, LocalDateTime now);
-    void markProposalExpired(UUID tenantId, UUID proposalId, LocalDateTime now);
+    boolean markProposalExpired(UUID tenantId, UUID proposalId, LocalDateTime now);
 }
