@@ -5,23 +5,30 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: workorders
-      POSTGRES_USER: ${POSTGRES_USER:-demo}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-demo}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_dev}
+      FLYWAY_PASSWORD: ${FLYWAY_PASSWORD:-flyway_owner_dev}
+      WORK_ORDER_DB_PASSWORD: ${WORK_ORDER_DB_PASSWORD:-work_order_app_dev}
+      AI_DB_PASSWORD: ${AI_DB_PASSWORD:-ai_app_dev}
+      ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD:-analytics_reader_dev}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U demo -d workorders"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 3s
       retries: 20
     volumes:
       - work-order-data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
 
   work-order-service:
     build:
       context: ./apps/work-order-service
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/workorders
-      DB_USERNAME: demo
-      DB_PASSWORD: demo
+      DB_USERNAME: work_order_app
+      DB_PASSWORD: ${WORK_ORDER_DB_PASSWORD:-work_order_app_dev}
+      FLYWAY_USER: flyway_owner
+      FLYWAY_PASSWORD: ${FLYWAY_PASSWORD:-flyway_owner_dev}
       JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=70.0
     depends_on:
       postgres:
@@ -48,6 +55,9 @@ services:
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
       LLM_FALLBACK_ENABLED: ${LLM_FALLBACK_ENABLED:-true}
       WORK_ORDER_BASE_URL: http://work-order-service:8080
+      AI_DB_URL: postgresql://postgres:5432/workorders
+      AI_DB_USERNAME: ai_app
+      AI_DB_PASSWORD: ${AI_DB_PASSWORD:-ai_app_dev}
       KNOWLEDGE_PATH: /app/knowledge/policies
     depends_on:
       work-order-service:

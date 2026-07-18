@@ -1,15 +1,24 @@
 spring:
   application:
     name: work-order-service
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/workorders}
-    username: ${DB_USERNAME:demo}
-    password: ${DB_PASSWORD:demo}
+    username: ${DB_USERNAME:work_order_app}
+    password: ${DB_PASSWORD:}
   jackson:
     property-naming-strategy: SNAKE_CASE
     default-property-inclusion: non_null
   flyway:
     enabled: true
+    user: ${FLYWAY_USER:flyway_owner}
+    password: ${FLYWAY_PASSWORD:}
+
+security:
+  jwt:
+    issuer-uri: ${JWT_ISSUER_URI:http://localhost:9000}
+    audience: ${JWT_AUDIENCE:work-order-service}
 
 mybatis-plus:
   configuration:
