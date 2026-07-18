@@ -1,6 +1,10 @@
 package com.tangmeng.workorder.controller;
 
 import com.tangmeng.workorder.api.ApiError;
+import com.tangmeng.workorder.api.ApiErrorWithPreview;
+import com.tangmeng.workorder.command.ActionProposalExpiredException;
+import com.tangmeng.workorder.command.IdempotencyConflictException;
+import com.tangmeng.workorder.command.WorkOrderVersionConflictException;
 import com.tangmeng.workorder.command.ActionNotPermittedException;
 import com.tangmeng.workorder.command.InvalidCommandException;
 import com.tangmeng.workorder.service.InvalidStateTransitionException;
@@ -15,6 +19,24 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler(WorkOrderVersionConflictException.class)
+    public ResponseEntity<ApiErrorWithPreview> handleVersionConflict(WorkOrderVersionConflictException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ApiErrorWithPreview.versionConflict(exception.getFreshPreview()));
+    }
+
+    @ExceptionHandler(IdempotencyConflictException.class)
+    public ResponseEntity<ApiError> handleIdempotencyConflict(IdempotencyConflictException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ApiError.of(IdempotencyConflictException.ERROR_CODE, "Idempotency key conflict"));
+    }
+
+    @ExceptionHandler(ActionProposalExpiredException.class)
+    public ResponseEntity<ApiError> handleExpired(ActionProposalExpiredException exception) {
+        return ResponseEntity.status(HttpStatus.GONE)
+            .body(ApiError.of(ActionProposalExpiredException.ERROR_CODE, "Action proposal expired"));
+    }
 
     @ExceptionHandler(InvalidCommandException.class)
     public ResponseEntity<ApiError> handleInvalidCommand(Exception exception) {

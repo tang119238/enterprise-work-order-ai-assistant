@@ -22,7 +22,7 @@ import com.tangmeng.workorder.mapper.WorkOrderMapper;
 import com.tangmeng.workorder.security.TenantContext;
 import com.tangmeng.workorder.service.WorkOrderNotFoundException;
 import com.tangmeng.workorder.tenant.TenantTransaction;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -32,7 +32,6 @@ import java.util.Set;
 import java.util.UUID;
 
 @Service
-@RequiredArgsConstructor
 public class ActionProposalService {
 
     public static final String TENANT_ADMIN = "TENANT_ADMIN";
@@ -52,6 +51,27 @@ public class ActionProposalService {
     private final TenantTransaction transactions;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final WorkOrderCommandService commandService;
+
+    @Autowired
+    public ActionProposalService(ActionProposalMapper proposalMapper, ProjectMapper projectMapper,
+                                 WorkOrderMapper workOrderMapper, TenantTransaction transactions,
+                                 ObjectMapper objectMapper, Clock clock,
+                                 WorkOrderCommandService commandService) {
+        this.proposalMapper = proposalMapper;
+        this.projectMapper = projectMapper;
+        this.workOrderMapper = workOrderMapper;
+        this.transactions = transactions;
+        this.objectMapper = objectMapper;
+        this.clock = clock;
+        this.commandService = commandService;
+    }
+
+    public ActionProposalService(ActionProposalMapper proposalMapper, ProjectMapper projectMapper,
+                                 WorkOrderMapper workOrderMapper, TenantTransaction transactions,
+                                 ObjectMapper objectMapper, Clock clock) {
+        this(proposalMapper, projectMapper, workOrderMapper, transactions, objectMapper, clock, null);
+    }
 
     public ActionProposalResponse create(TenantContext context, CreateProposalCommand command) {
         if (context == null || command == null) {
@@ -59,6 +79,24 @@ public class ActionProposalService {
         }
         assertKnownRoles(context);
         return transactions.required(context, () -> createInsideTransaction(context, command));
+    }
+
+    public com.tangmeng.workorder.api.WorkOrderExecutionResponse confirm(
+        TenantContext context, UUID proposalId,
+        com.tangmeng.workorder.api.ConfirmProposalRequest request, String idempotencyKey
+    ) {
+        if (request == null || commandService == null) throw new InvalidCommandException();
+        request.requireConfirm();
+        ActionProposalEntity reference = ActionProposalEntity.builder()
+            .id(proposalId).tenantId(context == null ? null : context.tenantId()).build();
+        return commandService.execute(context, reference, idempotencyKey);
+    }
+
+    public boolean reject(TenantContext context, UUID proposalId,
+                          com.tangmeng.workorder.api.ConfirmProposalRequest request) {
+        if (request == null || commandService == null) throw new InvalidCommandException();
+        request.requireReject();
+        return commandService.reject(context, proposalId);
     }
 
     private ActionProposalResponse createInsideTransaction(

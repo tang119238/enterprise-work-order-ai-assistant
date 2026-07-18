@@ -3,6 +3,7 @@ package com.tangmeng.workorder.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.tangmeng.workorder.api.ActionProposalResponse;
+import com.tangmeng.workorder.api.WorkOrderExecutionResponse;
 import com.tangmeng.workorder.command.ActionNotPermittedException;
 import com.tangmeng.workorder.command.ActionProposalService;
 import com.tangmeng.workorder.security.TenantContext;
@@ -125,6 +126,66 @@ class ActionProposalControllerTest {
                 .content("""
                     {"action_type":"CANCEL","target_work_order_no":"WO-1","parameters":"forged"}
                     """))
+            .andExpect(status().isUnprocessableEntity())
+            .andExpect(jsonPath("$.code").value("INVALID_COMMAND"));
+    }
+
+    @Test
+    void confirmsOnlyWithMatchingStrictBodyAndNonblankIdempotencyKey() throws Exception {
+        WorkOrderExecutionResponse response = new WorkOrderExecutionResponse(
+            PROPOSAL, UUID.fromString("00000000-0000-0000-0000-000000000001"),
+            "WO-20260718-001", "UPDATE", "PROCESSING", 8L
+        );
+        when(service.confirm(eq(CONTEXT), eq(PROPOSAL), any(), eq("confirm-key")))
+            .thenReturn(response);
+
+        mvc.perform(post("/api/action-proposals/{id}/confirm", PROPOSAL)
+                .with(authentication(tenantAuthentication(CONTEXT))).with(csrf())
+                .header("Idempotency-Key", "confirm-key")
+                .contentType("application/json").content("{\"decision\":\"CONFIRM\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.proposal_id").value(PROPOSAL.toString()))
+            .andExpect(jsonPath("$.version").value(8));
+
+        for (String body : List.of(
+            "{\"decision\":\"REJECT\"}",
+            "{\"decision\":\"CONFIRM\",\"confirmed_by\":\"forged\"}",
+            "{}"
+        )) {
+            mvc.perform(post("/api/action-proposals/{id}/confirm", PROPOSAL)
+                    .with(authentication(tenantAuthentication(CONTEXT))).with(csrf())
+                    .header("Idempotency-Key", "confirm-key")
+                    .contentType("application/json").content(body))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("INVALID_COMMAND"));
+        }
+
+        mvc.perform(post("/api/action-proposals/{id}/confirm", PROPOSAL)
+                .with(authentication(tenantAuthentication(CONTEXT))).with(csrf())
+                .header("Idempotency-Key", " ")
+                .contentType("application/json").content("{\"decision\":\"CONFIRM\"}"))
+            .andExpect(status().isUnprocessableEntity())
+            .andExpect(jsonPath("$.code").value("INVALID_COMMAND"));
+
+        mvc.perform(post("/api/action-proposals/{id}/confirm", PROPOSAL)
+                .with(authentication(tenantAuthentication(CONTEXT))).with(csrf())
+                .contentType("application/json").content("{\"decision\":\"CONFIRM\"}"))
+            .andExpect(status().isUnprocessableEntity())
+            .andExpect(jsonPath("$.code").value("INVALID_COMMAND"));
+    }
+
+    @Test
+    void rejectsOnlyWithMatchingStrictBodyAndRecordsTheHumanDecision() throws Exception {
+        when(service.reject(eq(CONTEXT), eq(PROPOSAL), any())).thenReturn(true);
+
+        mvc.perform(post("/api/action-proposals/{id}/reject", PROPOSAL)
+                .with(authentication(tenantAuthentication(CONTEXT))).with(csrf())
+                .contentType("application/json").content("{\"decision\":\"REJECT\"}"))
+            .andExpect(status().isNoContent());
+
+        mvc.perform(post("/api/action-proposals/{id}/reject", PROPOSAL)
+                .with(authentication(tenantAuthentication(CONTEXT))).with(csrf())
+                .contentType("application/json").content("{\"decision\":\"CONFIRM\"}"))
             .andExpect(status().isUnprocessableEntity())
             .andExpect(jsonPath("$.code").value("INVALID_COMMAND"));
     }
