@@ -54,11 +54,12 @@ public class WorkOrderQueryService {
             UUID rootId = current.getRootWorkOrderId() == null
                 ? current.getId()
                 : current.getRootWorkOrderId();
+            WorkOrderEntity root = getScopedById(context, rootId, workOrderNo);
             LambdaQueryWrapper<WorkOrderEntity> query = scopedQuery(context);
             query.and(wrapper -> wrapper
-                    .eq(WorkOrderEntity::getId, rootId)
+                    .eq(WorkOrderEntity::getId, root.getId())
                     .or()
-                    .eq(WorkOrderEntity::getRootWorkOrderId, rootId))
+                    .eq(WorkOrderEntity::getRootWorkOrderId, root.getId()))
                 .orderByAsc(WorkOrderEntity::getCreatedAt);
             return mapper.selectList(query);
         });
@@ -73,6 +74,20 @@ public class WorkOrderQueryService {
         WorkOrderEntity entity = mapper.selectOne(query);
         if (entity == null) {
             throw new WorkOrderNotFoundException(workOrderNo);
+        }
+        return entity;
+    }
+
+    private WorkOrderEntity getScopedById(
+        TenantContext context,
+        UUID id,
+        String requestedWorkOrderNo
+    ) {
+        LambdaQueryWrapper<WorkOrderEntity> query = scopedQuery(context);
+        query.eq(WorkOrderEntity::getId, id);
+        WorkOrderEntity entity = mapper.selectOne(query);
+        if (entity == null) {
+            throw new WorkOrderNotFoundException(requestedWorkOrderNo);
         }
         return entity;
     }

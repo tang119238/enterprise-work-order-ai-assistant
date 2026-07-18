@@ -31,6 +31,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -43,6 +44,7 @@ class WorkOrderQueryServiceTest {
     private static final UUID USER = UUID.fromString("00000000-0000-0000-0000-000000009001");
     private static final UUID PROJECT_A = UUID.fromString("00000000-0000-0000-0000-000000010001");
     private static final UUID PROJECT_B = UUID.fromString("00000000-0000-0000-0000-000000010002");
+    private static final UUID PROJECT_C = UUID.fromString("00000000-0000-0000-0000-000000010003");
     private static final TenantContext CONTEXT = context(Set.of(PROJECT_A, PROJECT_B));
 
     @Mock
@@ -110,7 +112,7 @@ class WorkOrderQueryServiceTest {
     }
 
     @Test
-    void returnsRootAndReworkOrdersUsingRootUuidAndScopedQueries() {
+    void returnsAuthorizedRootAndInScopeChildrenWhileOmittingOutOfProjectChildren() {
         UUID rootId = UUID.fromString("00000000-0000-0000-0000-000000000007");
         WorkOrderEntity rework = WorkOrderEntity.builder()
             .id(UUID.fromString("00000000-0000-0000-0000-000000000008"))
@@ -128,25 +130,67 @@ class WorkOrderQueryServiceTest {
             .workOrderNo("WO-20260718-007")
             .createdAt(LocalDateTime.parse("2026-07-18T08:00:00"))
             .build();
-        when(mapper.selectOne(any())).thenReturn(rework);
+        WorkOrderEntity outOfProject = WorkOrderEntity.builder()
+            .id(UUID.fromString("00000000-0000-0000-0000-000000000009"))
+            .tenantId(TENANT)
+            .projectId(PROJECT_C)
+            .workOrderNo("WO-20260718-009")
+            .rootWorkOrderId(rootId)
+            .createdAt(LocalDateTime.parse("2026-07-18T11:00:00"))
+            .build();
+        when(mapper.selectOne(any())).thenReturn(rework, root);
         when(mapper.selectList(any())).thenReturn(List.of(root, rework));
 
         List<WorkOrderEntity> result = service.reworkChain(CONTEXT, "WO-20260718-008");
 
         assertThat(result).extracting(WorkOrderEntity::getWorkOrderNo)
-            .containsExactly("WO-20260718-007", "WO-20260718-008");
+            .containsExactly("WO-20260718-007", "WO-20260718-008")
+            .doesNotContain(outOfProject.getWorkOrderNo());
         verify(transactions).required(eq(CONTEXT), any());
 
-        ArgumentCaptor<Wrapper<WorkOrderEntity>> detail = wrapperCaptor();
-        verify(mapper).selectOne(detail.capture());
-        assertTenantAndProjects(detail.getValue());
+        ArgumentCaptor<Wrapper<WorkOrderEntity>> resolved = wrapperCaptor();
+        verify(mapper, times(2)).selectOne(resolved.capture());
+        assertTenantAndProjects(resolved.getAllValues().get(0));
+        assertTenantAndProjects(resolved.getAllValues().get(1));
+        assertThat(parameters(resolved.getAllValues().get(1))).contains(rootId);
 
         ArgumentCaptor<Wrapper<WorkOrderEntity>> chain = wrapperCaptor();
         verify(mapper).selectList(chain.capture());
         assertTenantAndProjects(chain.getValue());
         assertThat(parameters(chain.getValue()))
             .contains(rootId)
-            .doesNotContain("WO-20260718-007");
+            .doesNotContain("WO-20260718-007", PROJECT_C);
+    }
+
+    @Test
+    void hidesChainWhenVisibleChildPointsToOutOfProjectRoot() {
+        WorkOrderEntity outOfProjectRoot = WorkOrderEntity.builder()
+            .id(UUID.fromString("00000000-0000-0000-0000-000000000017"))
+            .tenantId(TENANT)
+            .projectId(PROJECT_C)
+            .workOrderNo("WO-20260718-017")
+            .build();
+        WorkOrderEntity visibleChild = WorkOrderEntity.builder()
+            .id(UUID.fromString("00000000-0000-0000-0000-000000000018"))
+            .tenantId(TENANT)
+            .projectId(PROJECT_A)
+            .workOrderNo("WO-20260718-018")
+            .rootWorkOrderId(outOfProjectRoot.getId())
+            .rootWorkOrderNo("WO-20260718-017")
+            .build();
+        when(mapper.selectOne(any())).thenReturn(visibleChild).thenReturn(null);
+
+        assertThatThrownBy(() -> service.reworkChain(CONTEXT, "WO-20260718-018"))
+            .isInstanceOf(WorkOrderNotFoundException.class)
+            .hasMessageContaining("WO-20260718-018");
+
+        ArgumentCaptor<Wrapper<WorkOrderEntity>> resolved = wrapperCaptor();
+        verify(mapper, times(2)).selectOne(resolved.capture());
+        assertTenantAndProjects(resolved.getAllValues().get(1));
+        assertThat(parameters(resolved.getAllValues().get(1)))
+            .contains(outOfProjectRoot.getId())
+            .doesNotContain(PROJECT_C);
+        verify(mapper, never()).selectList(any());
     }
 
     @Test
