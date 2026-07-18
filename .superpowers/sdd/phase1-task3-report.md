@@ -65,3 +65,41 @@ Observed at 2026-07-18 15:12:33 +08:00: `BUILD SUCCESS`; 31 tests run, 0 failure
 
 - PostgreSQL execution of the new current-authority queries could not be exercised locally because Docker is unavailable; query and transaction behavior are covered with focused unit tests, while prior schema/RLS integration tests remain skipped.
 - Project-specific order filtering is intentionally deferred to Task 5. This task establishes the authenticated/intersected context and coarse boundary without prematurely changing query mapper signatures.
+
+## Review fixes
+
+### Implemented review findings
+
+- Added immutable normalized scopes to `TenantContext`. Standard space-delimited scope strings and string collections are accepted and deduplicated; missing, blank, wrong-type, empty-collection, and blank-member shapes fail before database access.
+- The JWT authentication converter now preserves database-intersected tenant roles and normalized `SCOPE_<scope>` authorities, while retaining the full `TenantContext` as authentication details.
+- Removed `JwtDecoders.fromIssuerLocation`, so the checked-in default performs no issuer discovery. The default decoder loads a checked-in synthetic RSA public key; deployments can override it with `JWT_JWK_SET_URI` or `JWT_PUBLIC_KEY_LOCATION`.
+- Only the generated SubjectPublicKeyInfo public key is checked in. No private key or token issuer was created or stored.
+- Retained `JwtValidators.createDefaultWithIssuer` plus the audience validator and added explicit expired-`exp` and future-`nbf` regression assertions.
+- Strengthened tenant-access tests to require issuer, subject, tenant, and every relevant ACTIVE predicate in the SQL while verifying their bound arguments.
+- Project-aware query scoping remains deferred to Task 5.
+
+### Review-fix RED evidence
+
+```powershell
+mvn -f apps/work-order-service/pom.xml '-Dtest=TenantContextResolverTest,TenantAccessServiceTest,WorkOrderAuthorizationTest' test
+```
+
+Observed at 2026-07-18 15:27:34 +08:00: `BUILD FAILURE` during `testCompile`, with six expected errors for missing `TenantContext.scopes()`, missing scope-aware authentication converter, and the absent explicit decoder constructor. These failures directly represented both Important review findings.
+
+### Review-fix GREEN evidence
+
+```powershell
+mvn -f apps/work-order-service/pom.xml '-Dtest=TenantContextResolverTest,TenantAccessServiceTest,WorkOrderAuthorizationTest,TenantTransactionTest' test
+```
+
+Observed at 2026-07-18 15:29:41 +08:00: `BUILD SUCCESS`; 15 tests run, 0 failures, 0 errors, 0 skipped.
+
+An earlier GREEN attempt exposed a test-only Mockito matcher NPE while registering strengthened SQL stubs. The root cause was a null probe passed to the custom SQL predicate; making the predicate null-safe fixed the fixture without weakening any SQL assertion or changing production code.
+
+### Review-fix full-suite evidence
+
+```powershell
+mvn -f apps/work-order-service/pom.xml test
+```
+
+Observed at 2026-07-18 15:30:24 +08:00: `BUILD SUCCESS`; 35 tests run, 0 failures, 0 errors, 7 skipped. The seven Docker-dependent PostgreSQL/Testcontainers assertions remain skipped in this environment. The local-public-key decoder construction test executed without network issuer discovery.

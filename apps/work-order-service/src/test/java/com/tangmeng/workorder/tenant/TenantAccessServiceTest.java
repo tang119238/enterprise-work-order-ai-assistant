@@ -10,6 +10,7 @@ import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -27,12 +28,24 @@ class TenantAccessServiceTest {
         TenantTransaction transactions = mock(TenantTransaction.class);
         when(transactions.required(eq(TENANT), any())).thenAnswer(invocation ->
             ((Supplier<?>) invocation.getArgument(1)).get());
-        when(jdbc.query(any(String.class), any(org.springframework.jdbc.core.RowMapper.class),
+        when(jdbc.query(argThat(sql -> containsAll(sql,
+                "from user_identity", "issuer = ?", "subject = ?", "status = 'ACTIVE'")),
+            any(org.springframework.jdbc.core.RowMapper.class),
             eq("https://issuer.example"), eq("dispatcher-1")))
             .thenReturn(List.of(USER));
-        when(jdbc.query(any(String.class), any(org.springframework.jdbc.core.RowMapper.class),
+        when(jdbc.query(argThat(sql -> containsAll(sql,
+                "from tenant_membership", "tm.tenant_id = ?", "ui.issuer = ?", "ui.subject = ?",
+                "ui.status = 'ACTIVE'", "t.status = 'ACTIVE'", "tm.status = 'ACTIVE'")),
+            any(org.springframework.jdbc.core.RowMapper.class),
             eq(TENANT), eq("https://issuer.example"), eq("dispatcher-1")))
-            .thenReturn(List.of("DISPATCHER"), List.of(PROJECT));
+            .thenReturn(List.of("DISPATCHER"));
+        when(jdbc.query(argThat(sql -> containsAll(sql,
+                "from project_scope", "ps.tenant_id = ?", "ui.issuer = ?", "ui.subject = ?",
+                "ui.status = 'ACTIVE'", "t.status = 'ACTIVE'", "ps.status = 'ACTIVE'",
+                "p.status = 'ACTIVE'")),
+            any(org.springframework.jdbc.core.RowMapper.class),
+            eq(TENANT), eq("https://issuer.example"), eq("dispatcher-1")))
+            .thenReturn(List.of(PROJECT));
 
         TenantAccessService service = new TenantAccessService(
             jdbc, transactions, "https://issuer.example"
@@ -41,5 +54,17 @@ class TenantAccessServiceTest {
         assertThat(service.loadCurrentUserId(TENANT, "dispatcher-1")).isEqualTo(USER);
         assertThat(service.loadCurrentRoles(TENANT, "dispatcher-1")).containsExactly("DISPATCHER");
         assertThat(service.loadCurrentProjects(TENANT, "dispatcher-1")).containsExactly(PROJECT);
+    }
+
+    private static boolean containsAll(String sql, String... fragments) {
+        if (sql == null) {
+            return false;
+        }
+        for (String fragment : fragments) {
+            if (!sql.contains(fragment)) {
+                return false;
+            }
+        }
+        return true;
     }
 }

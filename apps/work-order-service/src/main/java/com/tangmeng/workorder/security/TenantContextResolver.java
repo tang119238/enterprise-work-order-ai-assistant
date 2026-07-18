@@ -27,6 +27,7 @@ public class TenantContextResolver {
         UUID tenantId = requiredUuid(jwt.getClaims().get("tenant_id"), "tenant_id");
         Set<String> tokenRoles = stringSet(jwt.getClaims().get("roles"), "roles");
         Set<UUID> tokenProjects = uuidSet(jwt.getClaims().get("project_ids"), "project_ids");
+        Set<String> scopes = scopeSet(jwt.getClaims().get("scope"));
 
         UUID userId = access.loadCurrentUserId(tenantId, subject);
         if (userId == null) {
@@ -38,7 +39,9 @@ public class TenantContextResolver {
         String requestId = optionalIdentifier(jwt.getClaims().get("request_id"));
         String traceId = optionalIdentifier(jwt.getClaims().get("trace_id"));
 
-        return new TenantContext(tenantId, userId, subject, roles, projects, requestId, traceId);
+        return new TenantContext(
+            tenantId, userId, subject, roles, projects, scopes, requestId, traceId
+        );
     }
 
     private static String requiredString(Object value, String claim) {
@@ -77,6 +80,38 @@ public class TenantContextResolver {
             result.add(requiredUuid(item, claim));
         }
         return result;
+    }
+
+    private static Set<String> scopeSet(Object value) {
+        LinkedHashSet<String> result = new LinkedHashSet<>();
+        if (value instanceof String text) {
+            addScopes(result, text);
+        } else if (value instanceof Collection<?> collection) {
+            if (collection.isEmpty()) {
+                throw invalid("Invalid scope claim");
+            }
+            for (Object item : collection) {
+                if (!(item instanceof String text)) {
+                    throw invalid("Invalid scope claim");
+                }
+                addScopes(result, text);
+            }
+        } else {
+            throw invalid("Invalid scope claim");
+        }
+        return result;
+    }
+
+    private static void addScopes(Set<String> result, String value) {
+        if (value.isBlank()) {
+            throw invalid("Invalid scope claim");
+        }
+        for (String scope : value.trim().split("\\s+")) {
+            if (scope.isBlank()) {
+                throw invalid("Invalid scope claim");
+            }
+            result.add(scope);
+        }
     }
 
     private static String optionalIdentifier(Object value) {

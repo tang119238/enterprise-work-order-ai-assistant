@@ -11,6 +11,7 @@ public record TenantContext(
     String subject,
     Set<String> roles,
     Set<UUID> projectIds,
+    Set<String> scopes,
     String requestId,
     String traceId
 ) {
@@ -18,6 +19,7 @@ public record TenantContext(
     public TenantContext {
         roles = immutableCopy(roles);
         projectIds = immutableCopy(projectIds);
+        scopes = immutableCopy(scopes);
     }
 
     private static <T> Set<T> immutableCopy(Set<T> values) {

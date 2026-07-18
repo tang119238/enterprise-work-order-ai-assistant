@@ -17,6 +17,8 @@ security:
   jwt:
     issuer-uri: ${JWT_ISSUER_URI:http://localhost:9000}
     audience: ${JWT_AUDIENCE:work-order-service}
+    jwk-set-uri: ${JWT_JWK_SET_URI:}
+    public-key-location: ${JWT_PUBLIC_KEY_LOCATION:classpath:security/dev-jwt-public-key.pem}
 
 mybatis-plus:
   configuration:

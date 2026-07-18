@@ -6,8 +6,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.core.io.ClassPathResource;
 
 import java.time.Instant;
 import java.util.List;
@@ -46,8 +49,11 @@ class TenantContextResolverTest {
         assertThat(context.subject()).isEqualTo("dispatcher-1");
         assertThat(context.roles()).containsExactly("DISPATCHER");
         assertThat(context.projectIds()).containsExactly(PROJECT_A);
+        assertThat(context.scopes()).containsExactly("work-order:write");
         assertThat(context.requestId()).isNotBlank();
         assertThat(context.traceId()).isNotBlank();
+        assertThatThrownBy(() -> context.scopes().add("work-order:admin"))
+            .isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test
@@ -77,6 +83,59 @@ class TenantContextResolverTest {
         assertThatThrownBy(() -> new TenantContextResolver(access).resolve(jwt))
             .isInstanceOf(BadCredentialsException.class);
         verifyNoInteractions(access);
+    }
+
+    @Test
+    void normalizesStringAndCollectionScopes() {
+        when(access.loadCurrentUserId(TENANT, "dispatcher-1")).thenReturn(USER);
+        when(access.loadCurrentRoles(TENANT, "dispatcher-1")).thenReturn(Set.of("DISPATCHER"));
+        when(access.loadCurrentProjects(TENANT, "dispatcher-1")).thenReturn(Set.of(PROJECT_A));
+        TenantContextResolver resolver = new TenantContextResolver(access);
+
+        TenantContext stringContext = resolver.resolve(jwt("dispatcher-1", TENANT.toString(),
+            List.of("DISPATCHER"), List.of(PROJECT_A.toString()), "  work-order:read   work-order:write  "));
+        TenantContext collectionContext = resolver.resolve(jwt("dispatcher-1", TENANT.toString(),
+            List.of("DISPATCHER"), List.of(PROJECT_A.toString()),
+            List.of("work-order:read", "work-order:write")));
+
+        assertThat(stringContext.scopes()).containsExactly("work-order:read", "work-order:write");
+        assertThat(collectionContext.scopes()).containsExactly("work-order:read", "work-order:write");
+    }
+
+    @Test
+    void rejectsMissingBlankWrongTypeAndBlankMemberScopes() {
+        Jwt missing = jwt("dispatcher-1", TENANT.toString(), List.of("DISPATCHER"),
+            List.of(PROJECT_A.toString()), null);
+        Jwt blank = jwt("dispatcher-1", TENANT.toString(), List.of("DISPATCHER"),
+            List.of(PROJECT_A.toString()), "  ");
+        Jwt wrongType = jwt("dispatcher-1", TENANT.toString(), List.of("DISPATCHER"),
+            List.of(PROJECT_A.toString()), 42);
+        Jwt blankMember = jwt("dispatcher-1", TENANT.toString(), List.of("DISPATCHER"),
+            List.of(PROJECT_A.toString()), List.of("work-order:read", " "));
+        TenantContextResolver resolver = new TenantContextResolver(access);
+
+        assertThatThrownBy(() -> resolver.resolve(missing)).isInstanceOf(BadCredentialsException.class);
+        assertThatThrownBy(() -> resolver.resolve(blank)).isInstanceOf(BadCredentialsException.class);
+        assertThatThrownBy(() -> resolver.resolve(wrongType)).isInstanceOf(BadCredentialsException.class);
+        assertThatThrownBy(() -> resolver.resolve(blankMember)).isInstanceOf(BadCredentialsException.class);
+        verifyNoInteractions(access);
+    }
+
+    @Test
+    void preservesScopesAsAuthenticationAuthorities() {
+        Jwt jwt = jwt("dispatcher-1", TENANT.toString(), List.of("DISPATCHER"),
+            List.of(PROJECT_A.toString()), "work-order:read work-order:write");
+        when(access.loadCurrentUserId(TENANT, "dispatcher-1")).thenReturn(USER);
+        when(access.loadCurrentRoles(TENANT, "dispatcher-1")).thenReturn(Set.of("DISPATCHER"));
+        when(access.loadCurrentProjects(TENANT, "dispatcher-1")).thenReturn(Set.of(PROJECT_A));
+
+        Authentication authentication = SecurityConfig
+            .jwtAuthenticationConverter(new TenantContextResolver(access)).convert(jwt);
+
+        assertThat(authentication.getAuthorities())
+            .extracting("authority")
+            .containsExactly("DISPATCHER", "SCOPE_work-order:read", "SCOPE_work-order:write");
+        assertThat(authentication.getDetails()).isInstanceOf(TenantContext.class);
     }
 
     @Test
@@ -116,6 +175,23 @@ class TenantContextResolverTest {
             .issuedAt(now.minusSeconds(10))
             .expiresAt(now.plusSeconds(60))
             .build();
+        Jwt expired = Jwt.withTokenValue("expired")
+            .header("alg", "RS256")
+            .issuer("https://issuer.example")
+            .audience(List.of("work-order-service"))
+            .subject("dispatcher-1")
+            .issuedAt(now.minusSeconds(120))
+            .expiresAt(now.minusSeconds(60))
+            .build();
+        Jwt notYetValid = Jwt.withTokenValue("not-yet-valid")
+            .header("alg", "RS256")
+            .issuer("https://issuer.example")
+            .audience(List.of("work-order-service"))
+            .subject("dispatcher-1")
+            .issuedAt(now)
+            .notBefore(now.plusSeconds(120))
+            .expiresAt(now.plusSeconds(300))
+            .build();
 
         OAuth2TokenValidatorResult validResult = SecurityConfig
             .jwtValidator("https://issuer.example", "work-order-service").validate(valid);
@@ -123,21 +199,52 @@ class TenantContextResolverTest {
             .jwtValidator("https://issuer.example", "work-order-service").validate(wrongAudience);
         OAuth2TokenValidatorResult wrongIssuerResult = SecurityConfig
             .jwtValidator("https://issuer.example", "work-order-service").validate(wrongIssuer);
+        OAuth2TokenValidatorResult expiredResult = SecurityConfig
+            .jwtValidator("https://issuer.example", "work-order-service").validate(expired);
+        OAuth2TokenValidatorResult notYetValidResult = SecurityConfig
+            .jwtValidator("https://issuer.example", "work-order-service").validate(notYetValid);
 
         assertThat(validResult.hasErrors()).isFalse();
         assertThat(invalidResult.hasErrors()).isTrue();
         assertThat(wrongIssuerResult.hasErrors()).isTrue();
+        assertThat(expiredResult.hasErrors()).isTrue();
+        assertThat(notYetValidResult.hasErrors()).isTrue();
+    }
+
+    @Test
+    void buildsDefaultDecoderFromLocalPublicKeyWithoutIssuerDiscovery() {
+        JwtDecoder decoder = new SecurityConfig().jwtDecoder(
+            "https://issuer.example",
+            "work-order-service",
+            "",
+            new ClassPathResource("security/dev-jwt-public-key.pem")
+        );
+
+        assertThat(decoder).isNotNull();
     }
 
     private static Jwt jwt(String subject, String tenantId, Object roles, Object projects) {
-        return Jwt.withTokenValue("test")
+        return jwt(subject, tenantId, roles, projects, "work-order:write");
+    }
+
+    private static Jwt jwt(
+        String subject,
+        String tenantId,
+        Object roles,
+        Object projects,
+        Object scope
+    ) {
+        Jwt.Builder builder = Jwt.withTokenValue("test")
             .header("alg", "none")
             .claim("iss", "https://issuer.example")
             .claim("sub", subject)
             .claim("tenant_id", tenantId)
             .claim("roles", roles)
-            .claim("project_ids", projects)
-            .claim("scope", "work-order:write")
+            .claim("project_ids", projects);
+        if (scope != null) {
+            builder.claim("scope", scope);
+        }
+        return builder
             .build();
     }
 }

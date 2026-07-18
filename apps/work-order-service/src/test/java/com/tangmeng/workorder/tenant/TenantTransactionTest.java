@@ -30,7 +30,8 @@ class TenantTransactionTest {
             "select set_config('app.tenant_id', ?, true)", String.class, TENANT.toString()
         )).thenReturn(TENANT.toString());
         TenantContext context = new TenantContext(
-            TENANT, UUID.randomUUID(), "dispatcher-1", Set.of("DISPATCHER"), Set.of(), "request", "trace"
+            TENANT, UUID.randomUUID(), "dispatcher-1", Set.of("DISPATCHER"), Set.of(),
+            Set.of("work-order:write"), "request", "trace"
         );
 
         String value = new TenantTransaction(transactionManager, jdbc)

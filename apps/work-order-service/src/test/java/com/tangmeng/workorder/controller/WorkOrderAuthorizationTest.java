@@ -79,6 +79,7 @@ class WorkOrderAuthorizationTest {
 
     private static TenantContext context(Set<String> roles, Set<UUID> projects) {
         return new TenantContext(TENANT, USER, "dispatcher-1", roles, projects,
+            Set.of("work-order:read"),
             "request-test", "trace-test");
     }
 

@@ -7,22 +7,28 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.convert.converter.Converter;
+import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
+import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.converter.RsaKeyConverters;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtClaimValidator;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
-import org.springframework.security.oauth2.jwt.JwtDecoders;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.security.web.SecurityFilterChain;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.security.interfaces.RSAPublicKey;
+import java.util.ArrayList;
 import java.util.List;
 
 @Configuration
@@ -46,17 +52,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/**", "/internal/**").hasAnyAuthority(TENANT_ROLES)
                 .anyRequest().denyAll())
             .oauth2ResourceServer(resourceServer -> resourceServer
-                .jwt(jwt -> jwt.jwtAuthenticationConverter(token -> {
-                    TenantContext context = resolver.resolve(token);
-                    List<SimpleGrantedAuthority> authorities = context.roles().stream()
-                        .map(SimpleGrantedAuthority::new)
-                        .toList();
-                    JwtAuthenticationToken authentication = new JwtAuthenticationToken(
-                        token, authorities, context.subject()
-                    );
-                    authentication.setDetails(context);
-                    return authentication;
-                }))
+                .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter(resolver)))
                 .authenticationEntryPoint((request, response, exception) ->
                     writeError(response, objectMapper, HttpServletResponse.SC_UNAUTHORIZED,
                         "UNAUTHORIZED", "Authentication required"))
@@ -70,11 +66,35 @@ public class SecurityConfig {
     @ConditionalOnMissingBean(JwtDecoder.class)
     JwtDecoder jwtDecoder(
         @Value("${security.jwt.issuer-uri}") String issuer,
-        @Value("${security.jwt.audience}") String audience
+        @Value("${security.jwt.audience}") String audience,
+        @Value("${security.jwt.jwk-set-uri:}") String jwkSetUri,
+        @Value("${security.jwt.public-key-location}") Resource publicKeyResource
     ) {
-        NimbusJwtDecoder decoder = JwtDecoders.fromIssuerLocation(issuer);
+        NimbusJwtDecoder decoder = jwkSetUri == null || jwkSetUri.isBlank()
+            ? publicKeyDecoder(publicKeyResource)
+            : NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
         decoder.setJwtValidator(jwtValidator(issuer, audience));
         return decoder;
+    }
+
+    static Converter<Jwt, AbstractAuthenticationToken> jwtAuthenticationConverter(
+        TenantContextResolver resolver
+    ) {
+        return token -> {
+            TenantContext context = resolver.resolve(token);
+            List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+            context.roles().stream()
+                .map(SimpleGrantedAuthority::new)
+                .forEach(authorities::add);
+            context.scopes().stream()
+                .map(scope -> new SimpleGrantedAuthority("SCOPE_" + scope))
+                .forEach(authorities::add);
+            JwtAuthenticationToken authentication = new JwtAuthenticationToken(
+                token, authorities, context.subject()
+            );
+            authentication.setDetails(context);
+            return authentication;
+        };
     }
 
     static OAuth2TokenValidator<Jwt> jwtValidator(String issuer, String audience) {
@@ -83,6 +103,18 @@ public class SecurityConfig {
             "aud", audiences -> audiences != null && audiences.contains(audience)
         );
         return new DelegatingOAuth2TokenValidator<>(issuerValidator, audienceValidator);
+    }
+
+    private static NimbusJwtDecoder publicKeyDecoder(Resource publicKeyResource) {
+        try (InputStream input = publicKeyResource.getInputStream()) {
+            RSAPublicKey publicKey = RsaKeyConverters.x509().convert(input);
+            if (publicKey == null) {
+                throw new IllegalStateException("JWT public key is empty");
+            }
+            return NimbusJwtDecoder.withPublicKey(publicKey).build();
+        } catch (IOException exception) {
+            throw new IllegalStateException("Could not load JWT public key", exception);
+        }
     }
 
     private static void writeError(
