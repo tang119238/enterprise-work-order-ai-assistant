@@ -267,18 +267,19 @@ mvn -f apps/work-order-service/pom.xml test
 docker version
 docker compose version
 .\.venv\Scripts\python.exe -m pip install -e "apps/ai-service[dev]"
+docker compose -f docker-compose.yml build
 .\.venv\Scripts\python.exe scripts/generate_smoke_fixtures.py --output .smoke
 docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml config --quiet
-docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml up --build -d
+docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml up -d
 Get-Content -Raw .smoke/provision.sql | docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d workorders
 .\.venv\Scripts\python.exe scripts/smoke_test.py --env-file .smoke/smoke.env
 docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml down
 git diff --check
 ```
 
-`generate_smoke_fixtures.py` 依赖 dev extra 中的 `cryptography`。它每次生成新的 2048-bit RSA 私钥和最长 15 分钟 Token，只写入 Git 忽略的 `.smoke/`；`docker-compose.smoke.yml` 只把公钥只读挂载给 Java。生成的 SQL 仅由本地管理员用于幂等建立合成 `user_identity`、ACTIVE 成员和项目范围，并在每个租户事务内执行 `SET LOCAL`；私钥和 Token 不进入 SQL。不要把 `.smoke/` 复制到提交或日志中。
+`generate_smoke_fixtures.py` 依赖 dev extra 中的 `cryptography`。应先完成可能耗时的镜像下载/构建，再生成凭据；它每次生成新的 2048-bit RSA 私钥和默认精确 900 秒 Token，只写入 Git 忽略的 `.smoke/`。`nbf` 保留 5 秒时钟偏移，`exp` 按 `nbf + lifetime` 计算，因此精确满足最长 900 秒边界。`docker-compose.smoke.yml` 只把公钥只读挂载给 Java。生成的 SQL 仅由本地管理员用于幂等建立合成 `user_identity`、ACTIVE 成员和项目范围，并在每个租户事务内执行 `SET LOCAL`；私钥和 Token 不进入 SQL。不要把 `.smoke/` 复制到提交或日志中。
 
-脚本使用唯一 `SMOKE-<12-hex>` 工单，不清理既有数据。建议创建后，它先通过工单 API 确认 404，再使用受限运行时角色 `work_order_app`（不是 `postgres`）在 `BEGIN; SET LOCAL app.tenant_id=...; ...; COMMIT;` 中按 tenant、工单号和 proposal id 精确计数，要求事实表/事件/Outbox 为零而建议为一。CREATE 后要求 `(version,event,outbox)=(0,1,1)`，UPDATE 后为 `(1,2,2)`，同键 replay 后仍不变。知识问答 `/chat` 也会单独验证引用；工单/组合 `/chat` 仍因 `WorkOrderClient` 不转发 Token 而不属于本阶段 live smoke。
+脚本使用唯一 `SMOKE-<12-hex>` 工单，不清理既有数据。建议创建后，它先通过工单 API 确认 404，再使用受限运行时角色 `work_order_app`（不是 `postgres`）在 `BEGIN; SET LOCAL app.tenant_id=...; ...; COMMIT;` 中按 tenant、工单号、proposal id 和权威 `after_snapshot.id` 精确计数；事件与 Outbox 直接按该预览工单 UUID 过滤，要求事实表/事件/Outbox 为零而建议为一。数据库密码只通过子进程环境转发，不进入命令 argv。CREATE 后要求 `(version,event,outbox)=(0,1,1)`，UPDATE 后为 `(1,2,2)`，同键 replay 后仍不变。知识问答 `/chat` 也会单独验证引用；工单/组合 `/chat` 仍因 `WorkOrderClient` 不转发 Token 而不属于本阶段 live smoke。
 
 纯 Java/Python 测试通过只说明可执行契约通过；只有 Docker 可用且上述 live smoke 打印 `smoke tests: PASS`，才能声明 PostgreSQL RLS/Compose 端到端验收通过。若 Docker 不可用，必须把 Compose、Docker 门控 Testcontainers 和 live smoke 明确记录为 skipped/blocked，不能写成通过。
 
@@ -288,6 +289,6 @@ git diff --check
 | --- | ---: | ---: | ---: |
 | Java 全量 | 145 | 23 | 0 |
 | Python AI 服务 | 43 | 0 | 0 |
-| Python scripts | 9 | 0 | 0 |
+| Python scripts | 11 | 0 | 0 |
 
 23 个 Java 跳过全部由不可用的 Docker/Testcontainers 门控：`ActionProposalMapperIntegrationTest` 1、`IdempotencyConcurrencyTest` 12、`TenantRlsIntegrationTest` 3、`TenantSchemaIntegrationTest` 5、`WorkOrderPostgresIntegrationTest` 2。Ruff、Python 编译和双 Compose 文件的 `config --quiet` 通过。Docker 客户端 29.6.1、Compose 5.2.0 可用，但 Linux Engine named pipe 不存在；因此 `docker compose up`、管理员 fixture 导入、PostgreSQL RLS 和 live smoke 均为 blocked/not run，不声明端到端通过。Compose 配置解析成功与 live smoke 是两个独立门槛，不能互相替代。

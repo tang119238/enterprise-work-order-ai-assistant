@@ -154,14 +154,15 @@ combined   -> call_work_order_tool -> retrieve_knowledge -> compose_answer
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e "apps/ai-service[dev]"
+docker compose -f docker-compose.yml build
 .\.venv\Scripts\python.exe scripts/generate_smoke_fixtures.py --output .smoke
-docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml up --build -d
+docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml up -d
 Get-Content -Raw .smoke/provision.sql | docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d workorders
 .\.venv\Scripts\python.exe scripts/smoke_test.py --env-file .smoke/smoke.env
 docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml down
 ```
 
-冒烟脚本会对 Token 头、RS256 签名、声明、UUID、时间窗和最长 15 分钟寿命做 fail-closed 预检，并硬失败于服务不可用或运行时角色无法执行 RLS 计数。它验证未认证请求返回精确稳定的 `401 AUTHENTICATION_REQUIRED`、跨租户 404、认证读取、未确认工单 API 404 且事实表/事件/Outbox 为零、约 15 分钟的权威预览、`AI_SERVICE` 多角色确认仍为 403、人工确认只增加一个版本，以及同 `Idempotency-Key` replay 不重复事件/Outbox；同时保留不需要工单 Token 的 knowledge-only `/chat` 检索检查。每次使用唯一 `SMOKE-<run-id>` 工单，不删除既有数据。
+先构建镜像，再生成默认精确 900 秒的 Token，避免首次下载/构建消耗短期凭据窗口。冒烟脚本会对 Token 头、RS256 签名、声明、UUID、时间窗和最长 15 分钟寿命做 fail-closed 预检，并硬失败于服务不可用或运行时角色无法执行 RLS 计数。它验证未认证请求返回精确稳定的 `401 AUTHENTICATION_REQUIRED`、跨租户 404、认证读取、未确认工单 API 404 且事实表/事件/Outbox 为零、约 15 分钟的权威预览、`AI_SERVICE` 多角色确认仍为 403、人工确认只增加一个版本，以及同 `Idempotency-Key` replay 不重复事件/Outbox；同时保留不需要工单 Token 的 knowledge-only `/chat` 检索检查。每次使用唯一 `SMOKE-<run-id>` 工单，不删除既有数据。
 
 原有 30 题离线评测是既有质量基线，不与本阶段认证 smoke 合并执行。当前 `WorkOrderClient` 尚不转发调用方 Token，因此其中的工单/组合 `/chat` 路径不能作为受保护 Java API 的 live 验收；修复方式必须是显式 Token 传递或交换，而不是放开匿名访问。
 
@@ -188,7 +189,7 @@ mvn -f apps/work-order-service/pom.xml test
 .\.venv\Scripts\python.exe -m mypy --config-file apps/ai-service/pyproject.toml apps/ai-service/app
 ```
 
-本阶段在 2026-07-18 的当前工作树验证结果：Java 全量 168（145 通过、失败 0、错误 0、跳过 23）；Python 为 AI 服务 43 + scripts 9，共 52 通过；Ruff、Python 编译与双 Compose 文件的 `config --quiet` 通过。23 个 Docker/Testcontainers 门控跳过精确为 `ActionProposalMapperIntegrationTest` 1、`IdempotencyConcurrencyTest` 12、`TenantRlsIntegrationTest` 3、`TenantSchemaIntegrationTest` 5、`WorkOrderPostgresIntegrationTest` 2。Docker 客户端 29.6.1 与 Compose 5.2.0 可用，但 Linux Engine named pipe 不存在，因此 `up`、PostgreSQL RLS 与 live smoke 是 blocked/not run，不声明端到端通过；Compose 配置解析不能替代运行时验收。
+本阶段在 2026-07-18 的当前工作树验证结果：Java 全量 168（145 通过、失败 0、错误 0、跳过 23）；Python 为 AI 服务 43 + scripts 11，共 54 通过；Ruff、Python 编译与双 Compose 文件的 `config --quiet` 通过。23 个 Docker/Testcontainers 门控跳过精确为 `ActionProposalMapperIntegrationTest` 1、`IdempotencyConcurrencyTest` 12、`TenantRlsIntegrationTest` 3、`TenantSchemaIntegrationTest` 5、`WorkOrderPostgresIntegrationTest` 2。Docker 客户端 29.6.1 与 Compose 5.2.0 可用，但 Linux Engine named pipe 不存在，因此 `up`、PostgreSQL RLS 与 live smoke 是 blocked/not run，不声明端到端通过；Compose 配置解析不能替代运行时验收。
 
 ## 国内模型平台
 

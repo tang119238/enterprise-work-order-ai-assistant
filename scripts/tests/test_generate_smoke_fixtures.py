@@ -66,6 +66,17 @@ def test_smoke_secrets_are_ignored_and_compose_override_mounts_only_public_key()
     assert '"cryptography>=45,<47"' in pyproject
 
 
+def test_default_token_lifetime_is_exactly_900_seconds(tmp_path: Path) -> None:
+    paths = generate_smoke_fixtures.generate_fixtures(
+        tmp_path,
+        now=datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
+    )
+    environment = read_env(paths.environment)
+    dispatcher = verify_token(environment["SMOKE_DISPATCHER_TOKEN"], paths.public_key.read_bytes())
+
+    assert dispatcher["exp"] - dispatcher["nbf"] == 900
+
+
 def read_env(path: Path) -> dict[str, str]:
     return dict(
         line.split("=", 1)

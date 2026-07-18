@@ -28,7 +28,7 @@ UPDATE_PROPOSAL_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 def test_command_smoke_sequence_uses_strict_decisions_and_proves_replay_is_stable() -> None:
     state = {"created": False, "version": 0, "events": 0, "outbox": 0}
     calls: list[tuple[str, str, Mapping[str, object] | None, Mapping[str, str]]] = []
-    count_calls: list[tuple[str, str]] = []
+    count_calls: list[tuple[str, str, str]] = []
     stable_update = {
         "proposal_id": UPDATE_PROPOSAL_ID,
         "work_order_id": WORK_ORDER_ID,
@@ -174,8 +174,9 @@ def test_command_smoke_sequence_uses_strict_decisions_and_proves_replay_is_stabl
         _config: smoke_test.SmokeConfig,
         work_order_no: str,
         proposal_id: str,
+        work_order_id: str,
     ) -> smoke_test.DatabaseCounts:
-        count_calls.append((work_order_no, proposal_id))
+        count_calls.append((work_order_no, proposal_id, work_order_id))
         return smoke_test.DatabaseCounts(
             work_orders=1 if state["created"] else 0,
             version=state["version"] if state["created"] else None,
@@ -220,12 +221,15 @@ def test_command_smoke_sequence_uses_strict_decisions_and_proves_replay_is_stabl
     assert confirm_calls[0][3]["Idempotency-Key"].startswith("smoke-create-")
     assert confirm_calls[1][3]["Idempotency-Key"].startswith("smoke-ai-denied-")
     assert confirm_calls[2][3]["Idempotency-Key"] == confirm_calls[3][3]["Idempotency-Key"]
-    assert all(work_order == "SMOKE-A1B2C3D4E5F6" for work_order, _ in count_calls)
+    assert all(
+        work_order == "SMOKE-A1B2C3D4E5F6" and work_order_id == WORK_ORDER_ID
+        for work_order, _proposal_id, work_order_id in count_calls
+    )
     assert count_calls == [
-        ("SMOKE-A1B2C3D4E5F6", CREATE_PROPOSAL_ID),
-        ("SMOKE-A1B2C3D4E5F6", CREATE_PROPOSAL_ID),
-        ("SMOKE-A1B2C3D4E5F6", UPDATE_PROPOSAL_ID),
-        ("SMOKE-A1B2C3D4E5F6", UPDATE_PROPOSAL_ID),
+        ("SMOKE-A1B2C3D4E5F6", CREATE_PROPOSAL_ID, WORK_ORDER_ID),
+        ("SMOKE-A1B2C3D4E5F6", CREATE_PROPOSAL_ID, WORK_ORDER_ID),
+        ("SMOKE-A1B2C3D4E5F6", UPDATE_PROPOSAL_ID, WORK_ORDER_ID),
+        ("SMOKE-A1B2C3D4E5F6", UPDATE_PROPOSAL_ID, WORK_ORDER_ID),
     ]
 
 
@@ -281,21 +285,76 @@ def test_database_count_command_uses_runtime_role_rls_and_explicit_filters(
         runtime_db_password="synthetic-runtime-password",
     )
 
-    command, sql, cwd = smoke_test.build_count_command(
+    command, sql, cwd, process_env = smoke_test.build_count_command(
         config,
         "SMOKE-A1B2C3D4E5F6",
         "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        WORK_ORDER_ID,
     )
 
     assert cwd == tmp_path
     assert command[command.index("-U") + 1] == "work_order_app"
-    assert "PGPASSWORD=synthetic-runtime-password" in command
+    assert "PGPASSWORD" in command
+    assert all("synthetic-runtime-password" not in argument for argument in command)
+    assert process_env["PGPASSWORD"] == "synthetic-runtime-password"
     assert "flyway_owner" not in command
     assert sql.index("BEGIN;") < sql.index("SET LOCAL app.tenant_id") < sql.index("SELECT")
     assert "11111111-1111-1111-1111-111111111111" in sql
     assert "SMOKE-A1B2C3D4E5F6" in sql
     assert "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" in sql
+    assert f"e.work_order_id = '{WORK_ORDER_ID}'::uuid" in sql
+    assert f"o.aggregate_id = '{WORK_ORDER_ID}'::uuid" in sql
     assert "COMMIT;" in sql
+
+
+def test_database_count_subprocess_forwards_password_only_through_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compose = tmp_path / "docker-compose.yml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+    config = smoke_test.SmokeConfig(
+        ai_base_url="http://ai.test",
+        work_order_base_url="http://work-order.test",
+        wait_seconds=1,
+        request_timeout_seconds=1,
+        dispatcher_token="dispatcher",
+        tenant_b_token="tenant-b",
+        ai_token="ai",
+        jwt_issuer="http://issuer.test",
+        jwt_audience="work-order-service",
+        compose_file=str(compose),
+        runtime_db_password="argv-secret-must-not-appear",
+    )
+    invocation: dict[str, object] = {}
+
+    def fake_run(command: list[str], **kwargs: object) -> object:
+        invocation["command"] = command
+        invocation.update(kwargs)
+        return smoke_test.subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="0||0|0|1\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(smoke_test.subprocess, "run", fake_run)
+
+    counts = smoke_test.count_command_rows(
+        config,
+        "SMOKE-A1B2C3D4E5F6",
+        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        WORK_ORDER_ID,
+    )
+
+    command = invocation["command"]
+    process_env = invocation["env"]
+    assert isinstance(command, list)
+    assert isinstance(process_env, dict)
+    assert all("argv-secret-must-not-appear" not in argument for argument in command)
+    assert command[command.index("-e") + 1] == "PGPASSWORD"
+    assert process_env["PGPASSWORD"] == "argv-secret-must-not-appear"
+    assert counts == smoke_test.DatabaseCounts(0, None, 0, 0, 1)
 
 
 def test_environment_config_fails_closed_when_a_required_token_is_missing(
@@ -369,7 +428,7 @@ def test_token_preflight_verifies_rs256_signature_and_strict_claims(tmp_path: Pa
     paths = generate_smoke_fixtures.generate_fixtures(
         tmp_path,
         now=datetime.now(UTC),
-        lifetime_seconds=600,
+        lifetime_seconds=900,
     )
     environment = dict(
         line.split("=", 1)
@@ -389,6 +448,8 @@ def test_token_preflight_verifies_rs256_signature_and_strict_claims(tmp_path: Pa
         jwt_public_key_path=str(paths.public_key),
     )
     smoke_test._validate_smoke_tokens(config)
+    _header, exact_boundary_claims = token_parts(config.dispatcher_token)
+    assert exact_boundary_claims["exp"] - exact_boundary_claims["nbf"] == 900
 
     header, claims = token_parts(config.dispatcher_token)
     now = int(time.time())

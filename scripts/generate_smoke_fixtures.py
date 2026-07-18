@@ -31,7 +31,7 @@ def generate_fixtures(
     output_dir: Path,
     *,
     now: datetime | None = None,
-    lifetime_seconds: int = 600,
+    lifetime_seconds: int = 900,
     issuer: str = "http://smoke-issuer.local",
     audience: str = "work-order-service",
     public_key_env_path: str | None = None,
@@ -63,7 +63,7 @@ def generate_fixtures(
     dispatcher_subject = f"synthetic-smoke-dispatcher-{run_id}"
     tenant_b_subject = f"synthetic-smoke-tenant-b-{run_id}"
     nbf = int((instant - timedelta(seconds=5)).timestamp())
-    exp = int((instant + timedelta(seconds=lifetime_seconds)).timestamp())
+    exp = nbf + lifetime_seconds
     common = {"iss": issuer, "aud": [audience], "nbf": nbf, "exp": exp}
     dispatcher = _sign(
         private_key,
@@ -232,7 +232,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=Path(".smoke"))
     parser.add_argument("--issuer", default="http://smoke-issuer.local")
     parser.add_argument("--audience", default="work-order-service")
-    parser.add_argument("--lifetime-seconds", type=int, default=600)
+    parser.add_argument("--lifetime-seconds", type=int, default=900)
     args = parser.parse_args()
     output = args.output
     public_env = (output / "jwt-public.pem").as_posix()

@@ -98,7 +98,7 @@ class SmokeConfig:
 
 
 Request = Callable[..., JsonHttpResponse]
-CountCommandRows = Callable[[SmokeConfig, str, str], DatabaseCounts]
+CountCommandRows = Callable[[SmokeConfig, str, str, str], DatabaseCounts]
 
 
 def load_env_file(path: Path) -> None:
@@ -173,10 +173,13 @@ def wait_until_ready(
 
 
 def count_command_rows(
-    config: SmokeConfig, work_order_no: str, proposal_id: str
+    config: SmokeConfig,
+    work_order_no: str,
+    proposal_id: str,
+    work_order_id: str,
 ) -> DatabaseCounts:
-    command, _sql, compose_dir = build_count_command(
-        config, work_order_no, proposal_id
+    command, _sql, compose_dir, process_env = build_count_command(
+        config, work_order_no, proposal_id, work_order_id
     )
     try:
         completed = subprocess.run(
@@ -186,6 +189,7 @@ def count_command_rows(
             text=True,
             timeout=15,
             check=False,
+            env=process_env,
         )
     except FileNotFoundError as error:
         raise RuntimeError("Docker Compose is required for command row assertions") from error
@@ -213,12 +217,16 @@ def count_command_rows(
 
 
 def build_count_command(
-    config: SmokeConfig, work_order_no: str, proposal_id: str
-) -> tuple[list[str], str, Path]:
+    config: SmokeConfig,
+    work_order_no: str,
+    proposal_id: str,
+    work_order_id: str,
+) -> tuple[list[str], str, Path, dict[str, str]]:
     if not _SAFE_ORDER.fullmatch(work_order_no):
         raise RuntimeError("Unsafe synthetic work-order number")
     tenant_id = str(uuid.UUID(config.tenant_a_id))
     proposal_uuid = str(uuid.UUID(proposal_id))
+    work_order_uuid = str(uuid.UUID(work_order_id))
     compose_path = Path(config.compose_file).resolve()
     if not compose_path.is_file():
         raise RuntimeError(f"Compose file does not exist: {compose_path}")
@@ -234,16 +242,10 @@ def build_count_command(
               AND w.work_order_no = '{work_order_no}'),
           (SELECT count(*) FROM work_order_event e
             WHERE e.tenant_id = '{tenant_id}'::uuid
-              AND e.work_order_id IN (
-                SELECT w.id FROM work_order w
-                 WHERE w.tenant_id = '{tenant_id}'::uuid
-                   AND w.work_order_no = '{work_order_no}')),
+              AND e.work_order_id = '{work_order_uuid}'::uuid),
           (SELECT count(*) FROM outbox_event o
             WHERE o.tenant_id = '{tenant_id}'::uuid
-              AND o.aggregate_id IN (
-                SELECT w.id FROM work_order w
-                 WHERE w.tenant_id = '{tenant_id}'::uuid
-                   AND w.work_order_no = '{work_order_no}')),
+              AND o.aggregate_id = '{work_order_uuid}'::uuid),
           (SELECT count(*) FROM action_proposal p
             WHERE p.tenant_id = '{tenant_id}'::uuid
               AND p.id = '{proposal_uuid}'::uuid);
@@ -257,7 +259,7 @@ def build_count_command(
         "exec",
         "-T",
         "-e",
-        f"PGPASSWORD={config.runtime_db_password}",
+        "PGPASSWORD",
         config.postgres_service,
         "psql",
         "-v",
@@ -272,7 +274,9 @@ def build_count_command(
         "-c",
         sql,
     ]
-    return command, sql, compose_path.parent
+    process_env = os.environ.copy()
+    process_env["PGPASSWORD"] = config.runtime_db_password
+    return command, sql, compose_path.parent, process_env
 
 
 def run_smoke_tests(
@@ -381,7 +385,7 @@ def run_smoke_tests(
         payload=create_payload,
         headers=dispatcher,
     ).body
-    _assert_authoritative_create_preview(
+    preview_work_order_id = _assert_authoritative_create_preview(
         create_proposal, create_payload, config.tenant_a_id
     )
     expires_at = _parse_local_datetime(create_proposal.get("expires_at"), "expires_at")
@@ -398,7 +402,9 @@ def run_smoke_tests(
         headers=dispatcher,
     ).body
     assert absent_before_confirmation.get("code") == "WORK_ORDER_NOT_FOUND"
-    preview_counts = count_command_rows(config, work_order_no, create_proposal_id)
+    preview_counts = count_command_rows(
+        config, work_order_no, create_proposal_id, preview_work_order_id
+    )
     assert preview_counts == DatabaseCounts(0, None, 0, 0, 1), (
         "CREATE preview mutated facts or was not persisted authoritatively: "
         f"{preview_counts}"
@@ -425,7 +431,9 @@ def run_smoke_tests(
         headers=dispatcher,
     ).body
     assert before_update.get("version") == 0
-    before_counts = count_command_rows(config, work_order_no, create_proposal_id)
+    before_counts = count_command_rows(
+        config, work_order_no, create_proposal_id, preview_work_order_id
+    )
     assert before_counts == DatabaseCounts(1, 0, 1, 1, 1), (
         "CREATE must produce version 0, one immutable event, and one outbox row; "
         f"got {before_counts}"
@@ -487,7 +495,9 @@ def run_smoke_tests(
     ).body
     assert after_update.get("version") == int(before_update["version"]) + 1
     assert after_update.get("title") == f"Smoke update {suffix}"
-    first_counts = count_command_rows(config, work_order_no, update_proposal_id)
+    first_counts = count_command_rows(
+        config, work_order_no, update_proposal_id, preview_work_order_id
+    )
     assert first_counts == DatabaseCounts(1, 1, 2, 2, 1), (
         "UPDATE confirmation must add exactly one version, event, and outbox row; "
         f"got {first_counts}"
@@ -512,7 +522,9 @@ def run_smoke_tests(
         headers=dispatcher,
     ).body
     assert after_replay.get("version") == 1
-    replay_counts = count_command_rows(config, work_order_no, update_proposal_id)
+    replay_counts = count_command_rows(
+        config, work_order_no, update_proposal_id, preview_work_order_id
+    )
     assert replay_counts == first_counts, (
         "Idempotent replay changed version/event/outbox counts: "
         f"before={first_counts}, after={replay_counts}"
@@ -598,7 +610,7 @@ def _assert_authoritative_create_preview(
     proposal: Mapping[str, object],
     request_payload: Mapping[str, object],
     tenant_id: str,
-) -> None:
+) -> str:
     assert proposal.get("action_type") == "CREATE"
     assert proposal.get("risk_level") == "MEDIUM"
     assert proposal.get("status") == "PENDING_CONFIRMATION"
@@ -613,7 +625,7 @@ def _assert_authoritative_create_preview(
     assert after.get("tenant_id") == tenant_id
     assert after.get("status") == "PENDING_DISPATCH"
     assert after.get("version") == 0
-    assert isinstance(after.get("id"), str)
+    return _required_text(after, "id")
 
 
 def _validate_smoke_tokens(config: SmokeConfig) -> None:
