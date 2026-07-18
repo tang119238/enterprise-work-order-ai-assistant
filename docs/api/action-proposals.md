@@ -69,7 +69,7 @@ JWT_PUBLIC_KEY_LOCATION=classpath:security/dev-jwt-public-key.pem
 - 仓库内 classpath 公钥只用于合成开发身份，不能成为生产信任根。
 - 基础 Compose 使用 classpath 开发公钥。若要覆盖 JWT 环境变量，应通过部署配置或不提交的 Compose override 注入，并用 `docker compose config` 检查最终值；仅修改 `.env` 而未把变量传入容器并不会改变服务配置。
 
-冒烟测试还会在发请求前解码 Token 声明做 fail-closed 预检；这一步不替代验签，真正的签名/issuer/audience/时间校验仍由 Spring Security 完成。所需三枚 Token：
+冒烟测试还会在发请求前对头部、RS256 签名、issuer、audience、主体、角色、scope、租户/项目 UUID、`nbf`/`exp` 和最长 15 分钟寿命做 fail-closed 预检；Spring Security 会独立完成服务端验签和声明校验。所需三枚 Token：
 
 | 环境变量 | 合成身份要求 |
 | --- | --- |
@@ -242,7 +242,7 @@ Invoke-RestMethod -Method Post `
 | HTTP | `code` | 当前场景 |
 | ---: | --- | --- |
 | 400 | `INVALID_QUERY_PARAMETER` | 查询分页/日期等参数无效 |
-| 401 | `UNAUTHORIZED` | Bearer Token 缺失，或签名、issuer、audience、时间无效 |
+| 401 | `AUTHENTICATION_REQUIRED` | Bearer Token 缺失，或签名、issuer、audience、时间无效 |
 | 403 | `FORBIDDEN` | 已认证但没有任何受保护 API authority（Security Filter） |
 | 403 | `ACTION_NOT_PERMITTED` | 当前角色不能创建/决策，或 Token/数据库有效角色含 `AI_SERVICE` 却尝试决策 |
 | 404 | `WORK_ORDER_NOT_FOUND` | 工单/建议不存在，或超出租户/项目范围 |
@@ -263,17 +263,31 @@ Invoke-RestMethod -Method Post `
 $env:JAVA_HOME = '<path-to-jdk-17>'
 mvn -f apps/work-order-service/pom.xml test
 .\.venv\Scripts\python.exe -m pytest apps/ai-service/tests scripts/tests -q
-.\.venv\Scripts\python.exe -m py_compile scripts/smoke_test.py
+.\.venv\Scripts\python.exe -m py_compile scripts/smoke_test.py scripts/generate_smoke_fixtures.py
 docker version
 docker compose version
-docker compose up --build -d
-.\.venv\Scripts\python.exe scripts/smoke_test.py
-docker compose down
+.\.venv\Scripts\python.exe -m pip install -e "apps/ai-service[dev]"
+.\.venv\Scripts\python.exe scripts/generate_smoke_fixtures.py --output .smoke
+docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml config --quiet
+docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml up --build -d
+Get-Content -Raw .smoke/provision.sql | docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d workorders
+.\.venv\Scripts\python.exe scripts/smoke_test.py --env-file .smoke/smoke.env
+docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml down
 git diff --check
 ```
 
-运行 `scripts/smoke_test.py` 前必须从 `.env.example` 配置三枚 Token、issuer/audience，并确保合成数据库身份/成员/项目范围存在。脚本使用唯一 `SMOKE-<12-hex>` 工单，不清理既有数据；通过 Compose 内 `psql` 精确检查 CREATE 后 `(version,event,outbox)=(0,1,1)`、UPDATE 后 `(1,2,2)`，以及同键 replay 后仍为 `(1,2,2)`。
+`generate_smoke_fixtures.py` 依赖 dev extra 中的 `cryptography`。它每次生成新的 2048-bit RSA 私钥和最长 15 分钟 Token，只写入 Git 忽略的 `.smoke/`；`docker-compose.smoke.yml` 只把公钥只读挂载给 Java。生成的 SQL 仅由本地管理员用于幂等建立合成 `user_identity`、ACTIVE 成员和项目范围，并在每个租户事务内执行 `SET LOCAL`；私钥和 Token 不进入 SQL。不要把 `.smoke/` 复制到提交或日志中。
+
+脚本使用唯一 `SMOKE-<12-hex>` 工单，不清理既有数据。建议创建后，它先通过工单 API 确认 404，再使用受限运行时角色 `work_order_app`（不是 `postgres`）在 `BEGIN; SET LOCAL app.tenant_id=...; ...; COMMIT;` 中按 tenant、工单号和 proposal id 精确计数，要求事实表/事件/Outbox 为零而建议为一。CREATE 后要求 `(version,event,outbox)=(0,1,1)`，UPDATE 后为 `(1,2,2)`，同键 replay 后仍不变。知识问答 `/chat` 也会单独验证引用；工单/组合 `/chat` 仍因 `WorkOrderClient` 不转发 Token 而不属于本阶段 live smoke。
 
 纯 Java/Python 测试通过只说明可执行契约通过；只有 Docker 可用且上述 live smoke 打印 `smoke tests: PASS`，才能声明 PostgreSQL RLS/Compose 端到端验收通过。若 Docker 不可用，必须把 Compose、Docker 门控 Testcontainers 和 live smoke 明确记录为 skipped/blocked，不能写成通过。
 
-2026-07-18 当前工作树的实际验证为：Maven/Java 全量 168（失败 0、错误 0、跳过 23），Python 46 通过，smoke 静态契约 3 通过；23 个跳过项全部是 Docker/Testcontainers 门控。Docker 客户端与 Compose 命令存在，但 Engine `Server` 为 null、Docker Desktop Linux named pipe 不存在，所以 Compose 启动与 live smoke 本次明确为 blocked/not run，而不是 passed。
+2026-07-18 当前工作树的实际验证：
+
+| 套件 | 通过 | 跳过 | 失败/错误 |
+| --- | ---: | ---: | ---: |
+| Java 全量 | 145 | 23 | 0 |
+| Python AI 服务 | 43 | 0 | 0 |
+| Python scripts | 9 | 0 | 0 |
+
+23 个 Java 跳过全部由不可用的 Docker/Testcontainers 门控：`ActionProposalMapperIntegrationTest` 1、`IdempotencyConcurrencyTest` 12、`TenantRlsIntegrationTest` 3、`TenantSchemaIntegrationTest` 5、`WorkOrderPostgresIntegrationTest` 2。Ruff、Python 编译和双 Compose 文件的 `config --quiet` 通过。Docker 客户端 29.6.1、Compose 5.2.0 可用，但 Linux Engine named pipe 不存在；因此 `docker compose up`、管理员 fixture 导入、PostgreSQL RLS 和 live smoke 均为 blocked/not run，不声明端到端通过。Compose 配置解析成功与 live smoke 是两个独立门槛，不能互相替代。

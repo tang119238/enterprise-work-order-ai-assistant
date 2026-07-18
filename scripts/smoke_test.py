@@ -12,17 +12,22 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 TENANT_A = "11111111-1111-1111-1111-111111111111"
 TENANT_B = "22222222-2222-2222-2222-222222222222"
 PROJECT_A = "00000000-0000-0000-0000-000000010001"
 PROJECT_B = "00000000-0000-0000-0000-000000020001"
 TENANT_A_READ_ORDER = "WO-20260718-001"
-TENANT_B_READ_ORDER = "WO-20260718-026"
+TENANT_B_READ_ORDER = "WO-20260718-028"
 _SAFE_ORDER = re.compile(r"^[A-Z0-9-]{1,64}$")
+MAX_TOKEN_LIFETIME_SECONDS = 900
 
 
 @dataclass(frozen=True)
@@ -30,6 +35,15 @@ class JsonHttpResponse:
     status: int
     body: dict[str, object]
     raw: bytes
+
+
+@dataclass(frozen=True)
+class DatabaseCounts:
+    work_orders: int
+    version: int | None
+    events: int
+    outbox: int
+    proposals: int
 
 
 @dataclass(frozen=True)
@@ -43,6 +57,7 @@ class SmokeConfig:
     ai_token: str
     jwt_issuer: str
     jwt_audience: str
+    jwt_public_key_path: str | None = None
     tenant_a_id: str = TENANT_A
     tenant_b_id: str = TENANT_B
     tenant_a_project_id: str = PROJECT_A
@@ -50,7 +65,8 @@ class SmokeConfig:
     compose_file: str = "docker-compose.yml"
     postgres_service: str = "postgres"
     postgres_database: str = "workorders"
-    postgres_user: str = "postgres"
+    runtime_db_user: str = "work_order_app"
+    runtime_db_password: str = "work_order_app_dev"
 
     @classmethod
     def from_environment(cls) -> SmokeConfig:
@@ -68,6 +84,7 @@ class SmokeConfig:
             ai_token=_required_env("SMOKE_AI_TOKEN"),
             jwt_issuer=_required_env("SMOKE_JWT_ISSUER"),
             jwt_audience=_required_env("SMOKE_JWT_AUDIENCE"),
+            jwt_public_key_path=_required_env("SMOKE_JWT_PUBLIC_KEY_PATH"),
             tenant_a_id=os.getenv("SMOKE_TENANT_A_ID", TENANT_A),
             tenant_b_id=os.getenv("SMOKE_TENANT_B_ID", TENANT_B),
             tenant_a_project_id=os.getenv("SMOKE_TENANT_A_PROJECT_ID", PROJECT_A),
@@ -75,12 +92,28 @@ class SmokeConfig:
             compose_file=os.getenv("SMOKE_COMPOSE_FILE", "docker-compose.yml"),
             postgres_service=os.getenv("SMOKE_POSTGRES_SERVICE", "postgres"),
             postgres_database=os.getenv("SMOKE_POSTGRES_DATABASE", "workorders"),
-            postgres_user=os.getenv("SMOKE_POSTGRES_USER", "postgres"),
+            runtime_db_user=os.getenv("SMOKE_RUNTIME_DB_USER", "work_order_app"),
+            runtime_db_password=_required_env("SMOKE_RUNTIME_DB_PASSWORD"),
         )
 
 
 Request = Callable[..., JsonHttpResponse]
-CountCommandRows = Callable[[SmokeConfig, str], tuple[int, int, int]]
+CountCommandRows = Callable[[SmokeConfig, str, str], DatabaseCounts]
+
+
+def load_env_file(path: Path) -> None:
+    if not path.is_file():
+        raise RuntimeError(f"Smoke env file does not exist: {path}")
+    for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise RuntimeError(f"Invalid smoke env line {line_number}")
+        name, value = line.split("=", 1)
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+            raise RuntimeError(f"Invalid smoke env name on line {line_number}")
+        os.environ.setdefault(name, value)
 
 
 def request_json(
@@ -139,48 +172,16 @@ def wait_until_ready(
     raise TimeoutError(f"Service did not become ready: {url}; last error: {last_error}")
 
 
-def count_command_rows(config: SmokeConfig, work_order_no: str) -> tuple[int, int, int]:
-    if not _SAFE_ORDER.fullmatch(work_order_no):
-        raise RuntimeError("Unsafe synthetic work-order number")
-    tenant_id = str(uuid.UUID(config.tenant_a_id))
-    compose_path = Path(config.compose_file).resolve()
-    if not compose_path.is_file():
-        raise RuntimeError(f"Compose file does not exist: {compose_path}")
-    sql = f"""
-        SELECT w.version,
-               (SELECT count(*) FROM work_order_event e
-                 WHERE e.tenant_id = w.tenant_id AND e.work_order_id = w.id),
-               (SELECT count(*) FROM outbox_event o
-                 WHERE o.tenant_id = w.tenant_id AND o.aggregate_id = w.id)
-          FROM work_order w
-         WHERE w.tenant_id = '{tenant_id}'::uuid
-           AND w.work_order_no = '{work_order_no}';
-    """
-    command = [
-        "docker",
-        "compose",
-        "-f",
-        str(compose_path),
-        "exec",
-        "-T",
-        config.postgres_service,
-        "psql",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-U",
-        config.postgres_user,
-        "-d",
-        config.postgres_database,
-        "-At",
-        "-F",
-        "|",
-        "-c",
-        sql,
-    ]
+def count_command_rows(
+    config: SmokeConfig, work_order_no: str, proposal_id: str
+) -> DatabaseCounts:
+    command, _sql, compose_dir = build_count_command(
+        config, work_order_no, proposal_id
+    )
     try:
         completed = subprocess.run(
             command,
-            cwd=compose_path.parent,
+            cwd=compose_dir,
             capture_output=True,
             text=True,
             timeout=15,
@@ -196,13 +197,82 @@ def count_command_rows(config: SmokeConfig, work_order_no: str) -> tuple[int, in
     rows = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
     if len(rows) != 1:
         raise AssertionError(
-            f"Expected exactly one synthetic work order, found {len(rows)}"
+            f"Expected exactly one database count row, found {len(rows)}"
         )
     try:
-        version, events, outbox = (int(value) for value in rows[0].split("|"))
+        work_orders, version_text, events, outbox, proposals = rows[0].split("|")
+        return DatabaseCounts(
+            work_orders=int(work_orders),
+            version=int(version_text) if version_text else None,
+            events=int(events),
+            outbox=int(outbox),
+            proposals=int(proposals),
+        )
     except (ValueError, TypeError) as error:
         raise AssertionError(f"Unexpected database count result: {rows[0]}") from error
-    return version, events, outbox
+
+
+def build_count_command(
+    config: SmokeConfig, work_order_no: str, proposal_id: str
+) -> tuple[list[str], str, Path]:
+    if not _SAFE_ORDER.fullmatch(work_order_no):
+        raise RuntimeError("Unsafe synthetic work-order number")
+    tenant_id = str(uuid.UUID(config.tenant_a_id))
+    proposal_uuid = str(uuid.UUID(proposal_id))
+    compose_path = Path(config.compose_file).resolve()
+    if not compose_path.is_file():
+        raise RuntimeError(f"Compose file does not exist: {compose_path}")
+    sql = f"""
+        BEGIN;
+        SET LOCAL app.tenant_id = '{tenant_id}';
+        SELECT
+          (SELECT count(*) FROM work_order w
+            WHERE w.tenant_id = '{tenant_id}'::uuid
+              AND w.work_order_no = '{work_order_no}'),
+          (SELECT max(w.version) FROM work_order w
+            WHERE w.tenant_id = '{tenant_id}'::uuid
+              AND w.work_order_no = '{work_order_no}'),
+          (SELECT count(*) FROM work_order_event e
+            WHERE e.tenant_id = '{tenant_id}'::uuid
+              AND e.work_order_id IN (
+                SELECT w.id FROM work_order w
+                 WHERE w.tenant_id = '{tenant_id}'::uuid
+                   AND w.work_order_no = '{work_order_no}')),
+          (SELECT count(*) FROM outbox_event o
+            WHERE o.tenant_id = '{tenant_id}'::uuid
+              AND o.aggregate_id IN (
+                SELECT w.id FROM work_order w
+                 WHERE w.tenant_id = '{tenant_id}'::uuid
+                   AND w.work_order_no = '{work_order_no}')),
+          (SELECT count(*) FROM action_proposal p
+            WHERE p.tenant_id = '{tenant_id}'::uuid
+              AND p.id = '{proposal_uuid}'::uuid);
+        COMMIT;
+    """
+    command = [
+        "docker",
+        "compose",
+        "-f",
+        str(compose_path),
+        "exec",
+        "-T",
+        "-e",
+        f"PGPASSWORD={config.runtime_db_password}",
+        config.postgres_service,
+        "psql",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-U",
+        config.runtime_db_user,
+        "-d",
+        config.postgres_database,
+        "-qAt",
+        "-F",
+        "|",
+        "-c",
+        sql,
+    ]
+    return command, sql, compose_path.parent
 
 
 def run_smoke_tests(
@@ -238,12 +308,16 @@ def run_smoke_tests(
     tenant_b = _bearer(config.tenant_b_token)
     ai = _bearer(config.ai_token)
 
-    _expect(
+    unauthenticated = _expect(
         request,
         f"{config.work_order_base_url}/api/work-orders/{TENANT_A_READ_ORDER}",
         401,
         config.request_timeout_seconds,
-    )
+    ).body
+    assert set(unauthenticated) == {"code", "message", "timestamp"}
+    assert unauthenticated["code"] == "AUTHENTICATION_REQUIRED"
+    assert unauthenticated["message"] == "Authentication required"
+    _parse_timestamp(unauthenticated["timestamp"], "401 timestamp")
     tenant_b_order = _expect(
         request,
         f"{config.work_order_base_url}/api/work-orders/{TENANT_B_READ_ORDER}",
@@ -269,6 +343,20 @@ def run_smoke_tests(
     ).body
     assert tenant_a_order.get("work_order_no") == TENANT_A_READ_ORDER
 
+    knowledge = _expect(
+        request,
+        f"{config.ai_base_url}/chat",
+        200,
+        config.request_timeout_seconds,
+        method="POST",
+        payload={
+            "session_id": f"smoke-knowledge-{run}",
+            "message": "返工链路规则是什么？",
+        },
+    ).body
+    assert _tool_names(knowledge) == set()
+    assert "rework-policy" in _document_ids(knowledge)
+
     create_payload: dict[str, object] = {
         "action_type": "CREATE",
         "parameters": {
@@ -283,6 +371,7 @@ def run_smoke_tests(
             "due_at": "2099-01-01T00:00:00",
         },
     }
+    proposal_requested_at = datetime.now(UTC).replace(tzinfo=None)
     create_proposal = _expect(
         request,
         f"{config.work_order_base_url}/api/action-proposals",
@@ -295,7 +384,25 @@ def run_smoke_tests(
     _assert_authoritative_create_preview(
         create_proposal, create_payload, config.tenant_a_id
     )
+    expires_at = _parse_local_datetime(create_proposal.get("expires_at"), "expires_at")
+    assert proposal_requested_at + timedelta(minutes=14, seconds=30) <= expires_at
+    assert expires_at <= datetime.now(UTC).replace(tzinfo=None) + timedelta(
+        minutes=15, seconds=30
+    )
     create_proposal_id = _required_text(create_proposal, "id")
+    absent_before_confirmation = _expect(
+        request,
+        f"{config.work_order_base_url}/api/work-orders/{work_order_no}",
+        404,
+        config.request_timeout_seconds,
+        headers=dispatcher,
+    ).body
+    assert absent_before_confirmation.get("code") == "WORK_ORDER_NOT_FOUND"
+    preview_counts = count_command_rows(config, work_order_no, create_proposal_id)
+    assert preview_counts == DatabaseCounts(0, None, 0, 0, 1), (
+        "CREATE preview mutated facts or was not persisted authoritatively: "
+        f"{preview_counts}"
+    )
     create_key = f"smoke-create-{run}"
     created = _expect(
         request,
@@ -318,8 +425,8 @@ def run_smoke_tests(
         headers=dispatcher,
     ).body
     assert before_update.get("version") == 0
-    before_counts = count_command_rows(config, work_order_no)
-    assert before_counts == (0, 1, 1), (
+    before_counts = count_command_rows(config, work_order_no, create_proposal_id)
+    assert before_counts == DatabaseCounts(1, 0, 1, 1, 1), (
         "CREATE must produce version 0, one immutable event, and one outbox row; "
         f"got {before_counts}"
     )
@@ -380,8 +487,8 @@ def run_smoke_tests(
     ).body
     assert after_update.get("version") == int(before_update["version"]) + 1
     assert after_update.get("title") == f"Smoke update {suffix}"
-    first_counts = count_command_rows(config, work_order_no)
-    assert first_counts == (1, 2, 2), (
+    first_counts = count_command_rows(config, work_order_no, update_proposal_id)
+    assert first_counts == DatabaseCounts(1, 1, 2, 2, 1), (
         "UPDATE confirmation must add exactly one version, event, and outbox row; "
         f"got {first_counts}"
     )
@@ -405,7 +512,7 @@ def run_smoke_tests(
         headers=dispatcher,
     ).body
     assert after_replay.get("version") == 1
-    replay_counts = count_command_rows(config, work_order_no)
+    replay_counts = count_command_rows(config, work_order_no, update_proposal_id)
     assert replay_counts == first_counts, (
         "Idempotent replay changed version/event/outbox counts: "
         f"before={first_counts}, after={replay_counts}"
@@ -436,6 +543,55 @@ def _expect(
             f"got {result.status} ({code})"
         )
     return result
+
+
+def _tool_names(response: Mapping[str, object]) -> set[str]:
+    calls = response.get("tool_calls")
+    if not isinstance(calls, list):
+        return set()
+    return {
+        name
+        for call in calls
+        if isinstance(call, dict)
+        and call.get("status") == "success"
+        and isinstance((name := call.get("name")), str)
+    }
+
+
+def _document_ids(response: Mapping[str, object]) -> set[str]:
+    citations = response.get("citations")
+    if not isinstance(citations, list):
+        return set()
+    return {
+        document_id
+        for citation in citations
+        if isinstance(citation, dict)
+        and isinstance((document_id := citation.get("document_id")), str)
+    }
+
+
+def _parse_timestamp(value: object, field: str) -> datetime:
+    if not isinstance(value, str):
+        raise AssertionError(f"Expected ISO timestamp field {field}")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise AssertionError(f"Expected ISO timestamp field {field}") from error
+    if parsed.tzinfo is None:
+        raise AssertionError(f"Expected timezone-aware timestamp field {field}")
+    return parsed
+
+
+def _parse_local_datetime(value: object, field: str) -> datetime:
+    if not isinstance(value, str):
+        raise AssertionError(f"Expected ISO local datetime field {field}")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise AssertionError(f"Expected ISO local datetime field {field}") from error
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+    return parsed
 
 
 def _assert_authoritative_create_preview(
@@ -502,47 +658,135 @@ def _validate_claims(
     required_project: str,
     label: str,
 ) -> dict[str, Any]:
-    claims = _decode_unverified_claims(token, label)
-    if claims.get("iss") != config.jwt_issuer:
+    header, claims = _decode_token(token, label)
+    if header.get("alg") != "RS256":
+        raise RuntimeError(f"{label} header alg must be RS256")
+    token_type = header.get("typ")
+    if token_type is not None and token_type != "JWT":
+        raise RuntimeError(f"{label} header typ must be JWT")
+    if config.jwt_public_key_path:
+        _verify_signature(token, config.jwt_public_key_path, label)
+
+    issuer = _nonblank_string(claims.get("iss"), label, "iss")
+    if issuer != config.jwt_issuer:
         raise RuntimeError(f"{label} has the wrong iss claim")
     audience = claims.get("aud")
-    audiences = {audience} if isinstance(audience, str) else set(audience or [])
+    if isinstance(audience, str):
+        audiences = {_nonblank_string(audience, label, "aud")}
+    elif isinstance(audience, list):
+        audiences = set(_nonblank_string_list(audience, label, "aud"))
+    else:
+        raise RuntimeError(f"{label} has an invalid aud claim")
     if config.jwt_audience not in audiences:
         raise RuntimeError(f"{label} has the wrong aud claim")
-    if claims.get("tenant_id") != expected_tenant:
+    subject = _nonblank_string(claims.get("sub"), label, "sub")
+    tenant_id = _uuid_string(claims.get("tenant_id"), label, "tenant_id")
+    if tenant_id != expected_tenant:
         raise RuntimeError(f"{label} has the wrong tenant_id claim")
-    subject = claims.get("sub")
-    if not isinstance(subject, str) or not subject.strip():
-        raise RuntimeError(f"{label} is missing a nonblank sub claim")
-    roles = set(claims.get("roles") or [])
+    roles_value = claims.get("roles")
+    if not isinstance(roles_value, list):
+        raise RuntimeError(f"{label} has an invalid roles claim")
+    roles = set(_nonblank_string_list(roles_value, label, "roles"))
     if not required_roles.issubset(roles):
         raise RuntimeError(f"{label} is missing required roles")
-    projects = set(claims.get("project_ids") or [])
+    projects_value = claims.get("project_ids")
+    if not isinstance(projects_value, list):
+        raise RuntimeError(f"{label} has an invalid project_ids claim")
+    projects = {
+        _uuid_string(project, label, "project_ids") for project in projects_value
+    }
     if required_project not in projects:
         raise RuntimeError(f"{label} is missing the required project_id")
     scope = claims.get("scope")
-    if not isinstance(scope, (str, list)) or not scope:
-        raise RuntimeError(f"{label} is missing the scope claim")
+    if isinstance(scope, str):
+        _nonblank_string(scope, label, "scope")
+    elif isinstance(scope, list):
+        _nonblank_string_list(scope, label, "scope")
+    else:
+        raise RuntimeError(f"{label} has an invalid scope claim")
     now = int(time.time())
-    if not isinstance(claims.get("exp"), int) or int(claims["exp"]) <= now:
-        raise RuntimeError(f"{label} is expired or missing exp")
-    if isinstance(claims.get("nbf"), int) and int(claims["nbf"]) > now:
-        raise RuntimeError(f"{label} is not valid yet")
+    not_before = _integer_date(claims.get("nbf"), label, "nbf")
+    expires = _integer_date(claims.get("exp"), label, "exp")
+    if not_before > now:
+        raise RuntimeError(f"{label} nbf claim is not valid yet")
+    if expires <= now:
+        raise RuntimeError(f"{label} exp claim is expired")
+    if expires <= not_before or expires - not_before > MAX_TOKEN_LIFETIME_SECONDS:
+        raise RuntimeError(f"{label} lifetime exceeds the smoke bound")
+    claims["sub"] = subject
     return claims
 
 
-def _decode_unverified_claims(token: str, label: str) -> dict[str, Any]:
+def _decode_token(token: str, label: str) -> tuple[dict[str, Any], dict[str, Any]]:
     parts = token.split(".")
     if len(parts) != 3 or any(not part for part in parts):
         raise RuntimeError(f"{label} is not a compact JWT")
+    header = _decode_json_segment(parts[0], label, "header")
+    claims = _decode_json_segment(parts[1], label, "claims")
+    return header, claims
+
+
+def _decode_json_segment(segment: str, label: str, part: str) -> dict[str, Any]:
     try:
-        payload = parts[1] + "=" * (-len(parts[1]) % 4)
-        claims = json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
+        padded = segment + "=" * (-len(segment) % 4)
+        raw = base64.b64decode(padded, altchars=b"-_", validate=True)
+        value = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"{label} has an invalid claims payload") from error
-    if not isinstance(claims, dict):
-        raise RuntimeError(f"{label} has an invalid claims payload")
-    return claims
+        raise RuntimeError(f"{label} has an invalid {part} payload") from error
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{label} {part} must be a JSON object")
+    return value
+
+
+def _verify_signature(token: str, public_key_path: str, label: str) -> None:
+    path = Path(public_key_path).resolve()
+    if not path.is_file():
+        raise RuntimeError(f"{label} public key file does not exist")
+    try:
+        public_key = serialization.load_pem_public_key(path.read_bytes())
+        if not isinstance(public_key, rsa.RSAPublicKey):
+            raise RuntimeError(f"{label} public key must be RSA")
+        header, claims, signature = token.split(".")
+        padded = signature + "=" * (-len(signature) % 4)
+        signature_bytes = base64.b64decode(
+            padded, altchars=b"-_", validate=True
+        )
+        public_key.verify(
+            signature_bytes,
+            f"{header}.{claims}".encode("ascii"),
+            padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+    except InvalidSignature as error:
+        raise RuntimeError(f"{label} signature verification failed") from error
+    except (ValueError, UnicodeEncodeError) as error:
+        raise RuntimeError(f"{label} signature is invalid") from error
+
+
+def _nonblank_string(value: object, label: str, claim: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"{label} has an invalid {claim} claim")
+    return value
+
+
+def _nonblank_string_list(value: list[object], label: str, claim: str) -> list[str]:
+    if not value:
+        raise RuntimeError(f"{label} has an invalid {claim} claim")
+    return [_nonblank_string(item, label, claim) for item in value]
+
+
+def _uuid_string(value: object, label: str, claim: str) -> str:
+    text = _nonblank_string(value, label, claim)
+    try:
+        return str(uuid.UUID(text))
+    except ValueError as error:
+        raise RuntimeError(f"{label} has an invalid {claim} UUID") from error
+
+
+def _integer_date(value: object, label: str, claim: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RuntimeError(f"{label} has an invalid {claim} claim")
+    return value
 
 
 def _nested(body: Mapping[str, object], outer: str, inner: str) -> object:
@@ -592,8 +836,11 @@ def main() -> int:
     parser.add_argument("--wait-seconds", type=float)
     parser.add_argument("--request-timeout-seconds", type=float)
     parser.add_argument("--compose-file")
+    parser.add_argument("--env-file", type=Path)
     args = parser.parse_args()
 
+    if args.env_file is not None:
+        load_env_file(args.env_file)
     config = SmokeConfig.from_environment()
     overrides = {
         name: value

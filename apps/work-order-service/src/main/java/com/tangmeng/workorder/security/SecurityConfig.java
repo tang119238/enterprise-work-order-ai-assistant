@@ -55,7 +55,7 @@ public class SecurityConfig {
                 .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter(resolver)))
                 .authenticationEntryPoint((request, response, exception) ->
                     writeError(response, objectMapper, HttpServletResponse.SC_UNAUTHORIZED,
-                        "UNAUTHORIZED", "Authentication required"))
+                        "AUTHENTICATION_REQUIRED", "Authentication required"))
                 .accessDeniedHandler((request, response, exception) ->
                     writeError(response, objectMapper, HttpServletResponse.SC_FORBIDDEN,
                         "FORBIDDEN", "Access denied")));

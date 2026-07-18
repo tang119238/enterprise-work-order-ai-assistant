@@ -86,6 +86,8 @@ flowchart TB
 
 Docker Compose 只向本机 IPv4 回环地址暴露 `8000` 和 `8080`，PostgreSQL 不映射宿主机端口。
 
+认证 smoke 的 RSA 密钥、短期 Token、授权 SQL 和环境文件由 fixture 生成器临时写入 Git 忽略的 `.smoke/`；Compose override 只把公钥只读挂载给 Java。管理员连接只用于建立合成身份和权限，验收计数改用受 RLS 约束的 `work_order_app`，并在事务内 `SET LOCAL app.tenant_id` 后按租户、工单号和建议 id 精确查询。
+
 图中的 `TOOL -> SECURITY` 表示受保护的目标边界，不表示 Python 当前会签发 Token。当前 `WorkOrderClient` 不持有、签发或转发服务 JWT，因此本阶段的认证读写 smoke 直接调用 Java API；让 `/chat` 工单路径投入使用前，部署适配层必须显式实现 Token 传递/交换。该限制不能通过放开 Java 匿名访问来规避。
 
 ## 4. 三条 Agent 路径

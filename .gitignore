@@ -13,4 +13,5 @@ venv/
 *.log
 eval/report.json
 secrets/
+.smoke/
 .worktrees/

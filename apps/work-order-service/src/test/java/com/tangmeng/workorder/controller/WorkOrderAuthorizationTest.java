@@ -18,8 +18,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
-import static org.mockito.Mockito.when;
+import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -48,8 +49,10 @@ class WorkOrderAuthorizationTest {
     void rejectsMissingTokenWithStable401() throws Exception {
         mvc.perform(get("/api/work-orders"))
             .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.code").value("UNAUTHORIZED"))
-            .andExpect(jsonPath("$.message").value("Authentication required"));
+            .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"))
+            .andExpect(jsonPath("$.message").value("Authentication required"))
+            .andExpect(jsonPath("$.timestamp").isString())
+            .andExpect(jsonPath("$.*", hasSize(3)));
     }
 
     @Test

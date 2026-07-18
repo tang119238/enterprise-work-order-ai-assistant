@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "cryptography>=45,<47",
     "pytest>=8.3,<9",
     "pytest-asyncio>=0.25,<1",
     "respx>=0.22,<1",

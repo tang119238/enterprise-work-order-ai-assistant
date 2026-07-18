@@ -38,7 +38,7 @@ curl http://127.0.0.1:8000/health
 - AI API 文档：<http://127.0.0.1:8000/docs>
 - Java 健康检查：<http://127.0.0.1:8080/actuator/health>
 
-健康检查无需认证；所有 `/api/**` 与 `/internal/**` 都需要服务端可验证的 JWT。复制 `.env.example` 为 `.env` 后，只能填入短期、合成身份的测试 Token。JWT 的签名私钥必须留在测试签发器或 Secret Store 中，不能提交到仓库。完整声明、角色和本地签名配置见 [操作建议 API](docs/api/action-proposals.md)。
+健康检查无需认证；所有 `/api/**` 与 `/internal/**` 都需要服务端可验证的 JWT。仓库提供的 fixture 生成器会在被忽略的 `.smoke/` 中临时创建 RSA 密钥、最长 15 分钟的合成 Token、幂等授权 SQL 和环境文件；Compose 只挂载公钥，私钥不会进入容器或 Git。完整流程见 [操作建议 API](docs/api/action-proposals.md)。
 
 停止并删除演示数据卷：
 
@@ -150,14 +150,20 @@ combined   -> call_work_order_tool -> retrieve_knowledge -> compose_answer
 
 ## 评测与测试
 
-已准备三枚短期合成 JWT、对应数据库成员/项目范围，并启动 Compose 后运行：
+需要认证的阶段验收使用一次性合成 fixture：
 
-```bash
-python scripts/smoke_test.py
-python eval/run_eval.py --base-url http://localhost:8000 --output eval/report.json
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e "apps/ai-service[dev]"
+.\.venv\Scripts\python.exe scripts/generate_smoke_fixtures.py --output .smoke
+docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml up --build -d
+Get-Content -Raw .smoke/provision.sql | docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d workorders
+.\.venv\Scripts\python.exe scripts/smoke_test.py --env-file .smoke/smoke.env
+docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml down
 ```
 
-冒烟脚本会硬失败于缺少 Token、错误声明、服务不可用或 Docker/数据库计数不可查；每次使用唯一 `SMOKE-<run-id>` 工单，验证 401、跨租户 404、认证读取、权威预览、`AI_SERVICE` 多角色确认仍为 403、人工确认只增加一个版本，以及同 `Idempotency-Key` replay 不重复事件/Outbox。它不会删除既有数据。
+冒烟脚本会对 Token 头、RS256 签名、声明、UUID、时间窗和最长 15 分钟寿命做 fail-closed 预检，并硬失败于服务不可用或运行时角色无法执行 RLS 计数。它验证未认证请求返回精确稳定的 `401 AUTHENTICATION_REQUIRED`、跨租户 404、认证读取、未确认工单 API 404 且事实表/事件/Outbox 为零、约 15 分钟的权威预览、`AI_SERVICE` 多角色确认仍为 403、人工确认只增加一个版本，以及同 `Idempotency-Key` replay 不重复事件/Outbox；同时保留不需要工单 Token 的 knowledge-only `/chat` 检索检查。每次使用唯一 `SMOKE-<run-id>` 工单，不删除既有数据。
+
+原有 30 题离线评测是既有质量基线，不与本阶段认证 smoke 合并执行。当前 `WorkOrderClient` 尚不转发调用方 Token，因此其中的工单/组合 `/chat` 路径不能作为受保护 Java API 的 live 验收；修复方式必须是显式 Token 传递或交换，而不是放开匿名访问。
 
 评测集严格包含 10 个制度问答、10 个工单查询和 10 个组合问答。验收门槛与本次结果：
 
@@ -177,12 +183,12 @@ $env:JAVA_HOME='<path-to-jdk-17>'
 mvn -f apps/work-order-service/pom.xml test
 .\.venv\Scripts\python.exe -m pytest apps/ai-service/tests -q
 .\.venv\Scripts\python.exe -m pytest scripts/tests -q
-.\.venv\Scripts\python.exe -m py_compile scripts/smoke_test.py
+.\.venv\Scripts\python.exe -m py_compile scripts/smoke_test.py scripts/generate_smoke_fixtures.py
 .\.venv\Scripts\python.exe -m ruff check apps/ai-service/app apps/ai-service/tests eval scripts
 .\.venv\Scripts\python.exe -m mypy --config-file apps/ai-service/pyproject.toml apps/ai-service/app
 ```
 
-本阶段在 2026-07-18 的当前工作树验证结果：已安装 Maven 3.9.16 + Java 17 全量运行 168 个 Java 测试，145 通过、23 个 Docker/Testcontainers 用例明确跳过；Python 合并测试 46 个全部通过，smoke 脚本编译和 `scripts` Ruff 检查通过。Docker CLI/Compose 可用，但 Docker Engine 返回 `Server: null` 且 named pipe 不存在，因此这次没有运行 `docker compose up` 和 live smoke，也不声明 PostgreSQL/Compose 端到端通过。Docker 门控的精确跳过项记录在阶段报告中。
+本阶段在 2026-07-18 的当前工作树验证结果：Java 全量 168（145 通过、失败 0、错误 0、跳过 23）；Python 为 AI 服务 43 + scripts 9，共 52 通过；Ruff、Python 编译与双 Compose 文件的 `config --quiet` 通过。23 个 Docker/Testcontainers 门控跳过精确为 `ActionProposalMapperIntegrationTest` 1、`IdempotencyConcurrencyTest` 12、`TenantRlsIntegrationTest` 3、`TenantSchemaIntegrationTest` 5、`WorkOrderPostgresIntegrationTest` 2。Docker 客户端 29.6.1 与 Compose 5.2.0 可用，但 Linux Engine named pipe 不存在，因此 `up`、PostgreSQL RLS 与 live smoke 是 blocked/not run，不声明端到端通过；Compose 配置解析不能替代运行时验收。
 
 ## 国内模型平台
 
