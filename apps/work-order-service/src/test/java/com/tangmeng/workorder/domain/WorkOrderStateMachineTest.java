@@ -30,6 +30,7 @@ import static com.tangmeng.workorder.domain.WorkOrderStatus.PROCESSING;
 class WorkOrderStateMachineTest {
 
     private final WorkOrderStateMachine stateMachine = new WorkOrderStateMachine();
+    private static final LocalDateTime OCCURRED_AT = LocalDateTime.of(2026, 7, 18, 10, 15);
 
     static Stream<Arguments> allowed() {
         return Stream.of(
@@ -51,7 +52,8 @@ class WorkOrderStateMachineTest {
         WorkOrderAction action,
         WorkOrderStatus expectedStatus
     ) {
-        assertThat(stateMachine.transition(snapshotFor(status, action), action)).isEqualTo(expectedStatus);
+        assertThat(stateMachine.transition(snapshotFor(status, action), action, OCCURRED_AT).status())
+            .isEqualTo(expectedStatus);
     }
 
     static Stream<Arguments> rejected() {
@@ -76,28 +78,94 @@ class WorkOrderStateMachineTest {
     @ParameterizedTest
     @MethodSource("rejected")
     void rejectsEveryOtherStatusActionPair(WorkOrderStatus status, WorkOrderAction action) {
-        assertInvalidTransition(() -> stateMachine.transition(snapshotFor(status, action), action));
+        assertInvalidTransition(() -> stateMachine.transition(snapshotFor(status, action), action, OCCURRED_AT));
     }
 
     @Test
     void rejectsAcceptWhenAcceptanceIsAlreadyRecorded() {
         assertInvalidTransition(() -> stateMachine.transition(
             new WorkOrderSnapshot(PENDING_ACCEPTANCE, LocalDateTime.of(2026, 7, 18, 9, 30), null),
-            ACCEPT));
+            ACCEPT,
+            OCCURRED_AT));
+    }
+
+    @Test
+    void rejectsAcceptWithoutAnExplicitTimestamp() {
+        assertInvalidTransition(() -> stateMachine.transition(
+            new WorkOrderSnapshot(PENDING_ACCEPTANCE, null, null),
+            ACCEPT,
+            null));
     }
 
     @Test
     void rejectsStartWhenAcceptanceIsMissing() {
         assertInvalidTransition(() -> stateMachine.transition(
             new WorkOrderSnapshot(PENDING_ACCEPTANCE, null, null),
-            START));
+            START,
+            OCCURRED_AT));
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.NullAndEmptySource
+    @org.junit.jupiter.params.provider.ValueSource(strings = {" ", "\t"})
+    void rejectsCancellationWithoutANonblankReason(String cancelReason) {
+        assertInvalidTransition(() -> stateMachine.transition(
+            new WorkOrderSnapshot(PROCESSING, null, cancelReason),
+            CANCEL,
+            OCCURRED_AT));
     }
 
     @Test
-    void rejectsCancellationWithoutANonblankReason() {
+    void acceptRecordsTheExplicitTimestampWhileRetainingPendingAcceptance() {
+        WorkOrderTransitionResult result = stateMachine.transition(
+            new WorkOrderSnapshot(PENDING_ACCEPTANCE, null, null),
+            ACCEPT,
+            OCCURRED_AT);
+
+        assertThat(result).isEqualTo(new WorkOrderTransitionResult(PENDING_ACCEPTANCE, OCCURRED_AT, null));
+    }
+
+    @Test
+    void startCarriesAcceptanceTimestampIntoProcessing() {
+        LocalDateTime acceptedAt = LocalDateTime.of(2026, 7, 18, 9, 30);
+
+        WorkOrderTransitionResult result = stateMachine.transition(
+            new WorkOrderSnapshot(PENDING_ACCEPTANCE, acceptedAt, null),
+            START,
+            OCCURRED_AT);
+
+        assertThat(result).isEqualTo(new WorkOrderTransitionResult(PROCESSING, acceptedAt, null));
+    }
+
+    @Test
+    void cancelReturnsANormalizedReason() {
+        WorkOrderTransitionResult result = stateMachine.transition(
+            new WorkOrderSnapshot(PROCESSING, null, "  Customer request  "),
+            CANCEL,
+            OCCURRED_AT);
+
+        assertThat(result).isEqualTo(new WorkOrderTransitionResult(CANCELLED, null, "Customer request"));
+    }
+
+    @Test
+    void rejectsANullSnapshot() {
+        assertInvalidTransition(() -> stateMachine.transition(null, ASSIGN, OCCURRED_AT));
+    }
+
+    @Test
+    void rejectsANullStatus() {
         assertInvalidTransition(() -> stateMachine.transition(
-            new WorkOrderSnapshot(PROCESSING, null, "  "),
-            CANCEL));
+            new WorkOrderSnapshot(null, null, null),
+            ASSIGN,
+            OCCURRED_AT));
+    }
+
+    @Test
+    void rejectsANullAction() {
+        assertInvalidTransition(() -> stateMachine.transition(
+            new WorkOrderSnapshot(PENDING_DISPATCH, null, null),
+            null,
+            OCCURRED_AT));
     }
 
     @ParameterizedTest

@@ -2,6 +2,7 @@ package com.tangmeng.workorder.domain;
 
 import com.tangmeng.workorder.service.InvalidStateTransitionException;
 
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.Map;
@@ -10,7 +11,19 @@ public class WorkOrderStateMachine {
 
     private static final Map<WorkOrderStatus, Map<WorkOrderAction, WorkOrderStatus>> TRANSITIONS = transitions();
 
-    public WorkOrderStatus transition(WorkOrderSnapshot current, WorkOrderAction action) {
+    /**
+     * Applies a domain action using the caller-supplied occurrence time to record ACCEPT deterministically.
+     * The occurrence time is required only for ACCEPT and is otherwise not used.
+     */
+    public WorkOrderTransitionResult transition(
+        WorkOrderSnapshot current,
+        WorkOrderAction action,
+        LocalDateTime occurredAt
+    ) {
+        if (current == null || current.status() == null || action == null) {
+            throw invalidTransition();
+        }
+
         WorkOrderStatus currentStatus = current.status();
         assertMutable(currentStatus);
 
@@ -19,26 +32,29 @@ public class WorkOrderStateMachine {
             throw invalidTransition();
         }
 
+        LocalDateTime acceptedAt = current.acceptedAt();
+        String cancelReason = current.cancelReason();
         switch (action) {
-            case ACCEPT -> requireAcceptanceNotRecorded(current);
+            case ACCEPT -> acceptedAt = recordAcceptance(current, occurredAt);
             case START -> requireAcceptanceRecorded(current);
-            case CANCEL -> requireCancellationReason(current);
+            case CANCEL -> cancelReason = normalizedCancellationReason(current);
             case ASSIGN, COMPLETE, CLOSE -> {
             }
         }
-        return nextStatus;
+        return new WorkOrderTransitionResult(nextStatus, acceptedAt, cancelReason);
     }
 
     public void assertMutable(WorkOrderStatus status) {
-        if (status == WorkOrderStatus.CLOSED || status == WorkOrderStatus.CANCELLED) {
+        if (status == null || status == WorkOrderStatus.CLOSED || status == WorkOrderStatus.CANCELLED) {
             throw invalidTransition();
         }
     }
 
-    private void requireAcceptanceNotRecorded(WorkOrderSnapshot current) {
-        if (current.acceptedAt() != null) {
+    private LocalDateTime recordAcceptance(WorkOrderSnapshot current, LocalDateTime occurredAt) {
+        if (current.acceptedAt() != null || occurredAt == null) {
             throw invalidTransition();
         }
+        return occurredAt;
     }
 
     private void requireAcceptanceRecorded(WorkOrderSnapshot current) {
@@ -47,10 +63,11 @@ public class WorkOrderStateMachine {
         }
     }
 
-    private void requireCancellationReason(WorkOrderSnapshot current) {
+    private String normalizedCancellationReason(WorkOrderSnapshot current) {
         if (current.cancelReason() == null || current.cancelReason().isBlank()) {
             throw invalidTransition();
         }
+        return current.cancelReason().strip();
     }
 
     private InvalidStateTransitionException invalidTransition() {
