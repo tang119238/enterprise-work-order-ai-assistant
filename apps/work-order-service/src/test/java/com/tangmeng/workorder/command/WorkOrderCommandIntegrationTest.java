@@ -144,10 +144,70 @@ class WorkOrderCommandIntegrationTest {
         when(repository.findIdempotency(TENANT, WorkOrderCommandService.CONFIRM_OPERATION, "key"))
             .thenReturn(Optional.of(new WorkOrderCommandRepository.StoredIdempotency(
                 "other-hash", mapper.createObjectNode(), 200)));
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
+        when(repository.findWorkOrder(TENANT, TARGET, Set.of(PROJECT))).thenReturn(order("PROCESSING"));
 
         assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "key"))
             .isInstanceOf(IdempotencyConflictException.class);
         verify(repository, never()).claimProposal(any(), any(), any(), any());
+    }
+
+    @Test
+    void mismatchedExistingKeyDoesNotRevealItAfterCurrentRoleRevocation() {
+        ActionProposalEntity proposal = proposal("UPDATE", payload().put("title", "different"));
+        when(repository.findIdempotency(TENANT, WorkOrderCommandService.CONFIRM_OPERATION, "key"))
+            .thenReturn(Optional.of(new WorkOrderCommandRepository.StoredIdempotency(
+                "other-hash", mapper.createObjectNode(), 200)));
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
+        when(access.loadCurrentRoles(TENANT, "human")).thenReturn(Set.of());
+
+        assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "key"))
+            .isInstanceOf(ActionNotPermittedException.class);
+        verifyNoProposalMutation();
+    }
+
+    @Test
+    void mismatchedExistingKeyDoesNotRevealItToAiMultiRoleCaller() {
+        ActionProposalEntity proposal = proposal("UPDATE", payload().put("title", "different"));
+        when(repository.findIdempotency(TENANT, WorkOrderCommandService.CONFIRM_OPERATION, "key"))
+            .thenReturn(Optional.of(new WorkOrderCommandRepository.StoredIdempotency(
+                "other-hash", mapper.createObjectNode(), 200)));
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
+        when(access.loadCurrentRoles(TENANT, "human")).thenReturn(Set.of("DISPATCHER", "AI_SERVICE"));
+        TenantContext aiMultiRole = new TenantContext(TENANT, USER, "human",
+            Set.of("DISPATCHER", "AI_SERVICE"), Set.of(PROJECT),
+            Set.of("work-order:write"), "request", "trace");
+
+        assertThatThrownBy(() -> service.execute(aiMultiRole, proposal, "key"))
+            .isInstanceOf(ActionNotPermittedException.class);
+        verifyNoProposalMutation();
+    }
+
+    @Test
+    void mismatchedExistingKeyDoesNotRevealItAcrossProposalTenantBoundary() {
+        ActionProposalEntity proposal = proposal("UPDATE", payload().put("title", "different"));
+        when(repository.findIdempotency(TENANT, WorkOrderCommandService.CONFIRM_OPERATION, "key"))
+            .thenReturn(Optional.of(new WorkOrderCommandRepository.StoredIdempotency(
+                "other-hash", mapper.createObjectNode(), 200)));
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "key"))
+            .isInstanceOf(WorkOrderNotFoundException.class);
+        verifyNoProposalMutation();
+    }
+
+    @Test
+    void mismatchedExistingKeyDoesNotRevealItOutsideCurrentProjectScope() {
+        ActionProposalEntity proposal = proposal("UPDATE", payload().put("title", "different"));
+        when(repository.findIdempotency(TENANT, WorkOrderCommandService.CONFIRM_OPERATION, "key"))
+            .thenReturn(Optional.of(new WorkOrderCommandRepository.StoredIdempotency(
+                "other-hash", mapper.createObjectNode(), 200)));
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
+        when(repository.findWorkOrder(TENANT, TARGET, Set.of(PROJECT))).thenReturn(null);
+
+        assertThatThrownBy(() -> service.execute(context("DISPATCHER"), proposal, "key"))
+            .isInstanceOf(WorkOrderNotFoundException.class);
+        verifyNoProposalMutation();
     }
 
     @Test
@@ -510,6 +570,12 @@ class WorkOrderCommandIntegrationTest {
             .workOrderNo("WO-1").title("old").description("d").projectName("P")
             .spacePath("S").orderType("REPAIR").priority("HIGH").status(status)
             .source("MANUAL").version(7L).createdAt(NOW.minusDays(1)).dueAt(NOW.plusDays(1)).build();
+    }
+
+    private void verifyNoProposalMutation() {
+        verify(repository, never()).claimProposal(any(), any(), any(), any());
+        verify(repository, never()).markProposalFailed(any(), any(), any(), any(), any());
+        verify(repository, never()).markProposalExecuted(any(), any(), any(), any());
     }
 
     private TenantContext context(String role) {

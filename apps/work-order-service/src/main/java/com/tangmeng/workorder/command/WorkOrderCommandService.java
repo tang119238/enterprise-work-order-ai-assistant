@@ -119,8 +119,6 @@ public class WorkOrderCommandService {
             stored = repository.findIdempotency(context.tenantId(), CONFIRM_OPERATION, key);
             if (stored.isEmpty()) throw new InvalidCommandException();
         }
-        if (stored.isPresent()) assertMatchingHash(stored.get(), hash);
-
         ActionProposalEntity proposal = requireProposalRecord(context, proposalId);
         if (isExpired(proposal, now)) throw new ActionProposalExpiredException();
         CurrentAuthority authority = currentAuthority(context);

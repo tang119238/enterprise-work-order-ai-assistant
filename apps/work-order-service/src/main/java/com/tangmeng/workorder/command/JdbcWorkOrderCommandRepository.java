@@ -14,7 +14,6 @@ import com.tangmeng.workorder.mapper.WorkOrderEventMapper;
 import com.tangmeng.workorder.mapper.WorkOrderMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -105,12 +104,24 @@ public class JdbcWorkOrderCommandRepository implements WorkOrderCommandRepositor
     @Override
     public InsertWorkOrderResult insertWorkOrder(WorkOrderEntity order) {
         try {
-            return workOrderMapper.insert(order) == 1 ? InsertWorkOrderResult.INSERTED
-                : InsertWorkOrderResult.INVALID;
-        } catch (DuplicateKeyException exception) {
-            return InsertWorkOrderResult.DUPLICATE;
+            int inserted = jdbc.update("""
+                insert into work_order
+                  (id,tenant_id,work_order_no,title,description,project_id,project_name,space_path,
+                   order_type,priority,status,assignee_id,assignee_name,source,root_work_order_id,
+                   root_work_order_no,rework_reason,version,accepted_at,created_by,updated_by,created_at,
+                   due_at,completed_at,cancelled_at,cancel_reason)
+                values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                on conflict do nothing
+                """, order.getId(), order.getTenantId(), order.getWorkOrderNo(), order.getTitle(),
+                order.getDescription(), order.getProjectId(), order.getProjectName(), order.getSpacePath(),
+                order.getOrderType(), order.getPriority(), order.getStatus(), order.getAssigneeId(),
+                order.getAssigneeName(), order.getSource(), order.getRootWorkOrderId(),
+                order.getRootWorkOrderNo(), order.getReworkReason(), order.getVersion(), order.getAcceptedAt(),
+                order.getCreatedBy(), order.getUpdatedBy(), order.getCreatedAt(), order.getDueAt(),
+                order.getCompletedAt(), order.getCancelledAt(), order.getCancelReason());
+            return inserted == 1 ? InsertWorkOrderResult.INSERTED : InsertWorkOrderResult.DUPLICATE;
         } catch (DataIntegrityViolationException exception) {
-            return InsertWorkOrderResult.INVALID;
+            throw new InvalidCommandException(exception);
         }
     }
 

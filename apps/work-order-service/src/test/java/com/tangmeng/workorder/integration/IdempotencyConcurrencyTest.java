@@ -10,7 +10,9 @@ import com.tangmeng.workorder.domain.ActionProposalEntity;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tangmeng.workorder.security.TenantContext;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -38,6 +40,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @Testcontainers(disabledWithoutDocker = true)
 @SpringBootTest
+@TestMethodOrder(MethodOrderer.Random.class)
 class IdempotencyConcurrencyTest {
 
     private static final UUID TENANT = UUID.fromString("11111111-1111-1111-1111-111111111111");
@@ -74,6 +77,22 @@ class IdempotencyConcurrencyTest {
 
     @BeforeEach
     void seedAuthorityAndProposal() throws Exception {
+        executeAdmin("""
+            drop trigger if exists force_work_order_event_failure on work_order_event;
+            drop function if exists force_work_order_event_failure();
+            drop trigger if exists suppress_outbox_insert on outbox_event;
+            drop function if exists suppress_outbox_insert();
+            alter table work_order_event disable trigger work_order_event_append_only;
+            delete from work_order_event where tenant_id='11111111-1111-1111-1111-111111111111';
+            alter table work_order_event enable trigger work_order_event_append_only;
+            delete from outbox_event where tenant_id='11111111-1111-1111-1111-111111111111';
+            delete from idempotency_record where tenant_id='11111111-1111-1111-1111-111111111111';
+            delete from action_proposal where tenant_id='11111111-1111-1111-1111-111111111111';
+            delete from work_order_assignment where tenant_id='11111111-1111-1111-1111-111111111111';
+            update work_order set version=0, updated_by=null,
+                title='reliability baseline ' || work_order_no
+            where tenant_id='11111111-1111-1111-1111-111111111111';
+            """);
         executeAdmin("""
             insert into user_identity (id,issuer,subject,display_name,status)
             values ('00000000-0000-0000-0000-000000009001','http://localhost:9000','human','Human','ACTIVE')
@@ -191,7 +210,8 @@ class IdempotencyConcurrencyTest {
         }
         assertThat(queryText("select status from action_proposal where id='" + proposal + "'"))
             .isEqualTo("PENDING_CONFIRMATION");
-        assertThat(queryCount("select count(*) from idempotency_record where idempotency_key='denied-key'"))
+        assertThat(queryCount("select count(*) from idempotency_record where tenant_id='" + TENANT
+            + "' and idempotency_key='denied-key'"))
             .isZero();
     }
 
@@ -319,8 +339,8 @@ class IdempotencyConcurrencyTest {
         }
         assertThat(queryCount("select count(*) from work_order_event where tenant_id='" + TENANT
             + "' and work_order_id='" + target + "'")).isEqualTo(1);
-        assertThat(queryCount("select count(*) from idempotency_record where idempotency_key in "
-            + "('different-key-a','different-key-b')")).isEqualTo(1);
+        assertThat(queryCount("select count(*) from idempotency_record where tenant_id='" + TENANT
+            + "' and idempotency_key in ('different-key-a','different-key-b')")).isEqualTo(1);
     }
 
     @Test
@@ -349,7 +369,8 @@ class IdempotencyConcurrencyTest {
         }
         assertThat(queryCount("select count(*) from work_order_event where tenant_id='" + TENANT
             + "' and work_order_id in ('" + firstTarget + "','" + secondTarget + "')")).isEqualTo(1);
-        assertThat(queryCount("select count(*) from idempotency_record where idempotency_key='shared-proposal-key'"))
+        assertThat(queryCount("select count(*) from idempotency_record where tenant_id='" + TENANT
+            + "' and idempotency_key='shared-proposal-key'"))
             .isEqualTo(1);
     }
 
