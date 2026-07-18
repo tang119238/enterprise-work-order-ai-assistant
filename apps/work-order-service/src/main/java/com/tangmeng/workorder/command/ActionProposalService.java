@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.tangmeng.workorder.api.ActionProposalResponse;
 import com.tangmeng.workorder.command.model.CreateProposalCommand;
 import com.tangmeng.workorder.domain.ActionProposalEntity;
+import com.tangmeng.workorder.domain.ProjectEntity;
 import com.tangmeng.workorder.domain.WorkOrderAction;
 import com.tangmeng.workorder.domain.WorkOrderEntity;
 import com.tangmeng.workorder.domain.WorkOrderSnapshot;
@@ -16,6 +17,7 @@ import com.tangmeng.workorder.domain.WorkOrderStateMachine;
 import com.tangmeng.workorder.domain.WorkOrderStatus;
 import com.tangmeng.workorder.domain.WorkOrderTransitionResult;
 import com.tangmeng.workorder.mapper.ActionProposalMapper;
+import com.tangmeng.workorder.mapper.ProjectMapper;
 import com.tangmeng.workorder.mapper.WorkOrderMapper;
 import com.tangmeng.workorder.security.TenantContext;
 import com.tangmeng.workorder.service.WorkOrderNotFoundException;
@@ -45,6 +47,7 @@ public class ActionProposalService {
     private static final String PENDING_CONFIRMATION = "PENDING_CONFIRMATION";
 
     private final ActionProposalMapper proposalMapper;
+    private final ProjectMapper projectMapper;
     private final WorkOrderMapper workOrderMapper;
     private final TenantTransaction transactions;
     private final ObjectMapper objectMapper;
@@ -68,16 +71,18 @@ public class ActionProposalService {
         JsonNode after;
         UUID targetId;
         long expectedVersion;
+        JsonNode commandPayload;
 
         if (command instanceof CreateProposalCommand.Create create) {
             requireRoleOrAi(context, DISPATCHER);
-            if (!context.projectIds().contains(create.projectId())) {
-                throw new WorkOrderNotFoundException(create.workOrderNo());
-            }
+            ProjectEntity project = loadProject(context, create);
             targetId = null;
             expectedVersion = 0L;
             before = NullNode.getInstance();
-            after = createSnapshot(context, create, now);
+            after = createSnapshot(context, create, project, now);
+            ObjectNode authoritativeCommand = objectMapper.valueToTree(create);
+            authoritativeCommand.put("project_name", project.getName());
+            commandPayload = authoritativeCommand;
         } else {
             requireActionRole(context, command);
             WorkOrderEntity current = loadTarget(context, command.targetWorkOrderNo());
@@ -86,6 +91,7 @@ public class ActionProposalService {
             expectedVersion = current.getVersion();
             before = snapshot(current);
             after = preview(current, command, now);
+            commandPayload = objectMapper.valueToTree(command);
         }
 
         String risk = riskFor(command.actionType());
@@ -95,7 +101,7 @@ public class ActionProposalService {
             .tenantId(context.tenantId())
             .actionType(command.actionType())
             .targetId(targetId)
-            .commandPayload(objectMapper.valueToTree(command))
+            .commandPayload(commandPayload)
             .beforeSnapshot(before)
             .afterSnapshot(after)
             .riskLevel(risk)
@@ -116,11 +122,26 @@ public class ActionProposalService {
             command.targetWorkOrderNo(),
             risk,
             PENDING_CONFIRMATION,
-            before.isNull() ? null : before,
+            before,
             after,
             expectedVersion,
             expiresAt
         );
+    }
+
+    private ProjectEntity loadProject(TenantContext context, CreateProposalCommand.Create create) {
+        if (!context.projectIds().contains(create.projectId())) {
+            throw new WorkOrderNotFoundException(create.workOrderNo());
+        }
+        LambdaQueryWrapper<ProjectEntity> query = Wrappers.lambdaQuery();
+        query.eq(ProjectEntity::getTenantId, context.tenantId())
+            .eq(ProjectEntity::getId, create.projectId())
+            .eq(ProjectEntity::getStatus, "ACTIVE");
+        ProjectEntity project = projectMapper.selectOne(query);
+        if (project == null) {
+            throw new WorkOrderNotFoundException(create.workOrderNo());
+        }
+        return project;
     }
 
     private WorkOrderEntity loadTarget(TenantContext context, String workOrderNo) {
@@ -208,6 +229,7 @@ public class ActionProposalService {
     private ObjectNode createSnapshot(
         TenantContext context,
         CreateProposalCommand.Create create,
+        ProjectEntity project,
         LocalDateTime now
     ) {
         ObjectNode snapshot = objectMapper.createObjectNode();
@@ -217,7 +239,7 @@ public class ActionProposalService {
         snapshot.put("title", create.title());
         snapshot.put("description", create.description());
         snapshot.put("project_id", create.projectId().toString());
-        snapshot.put("project_name", create.projectName());
+        snapshot.put("project_name", project.getName());
         snapshot.put("space_path", create.spacePath());
         snapshot.put("order_type", create.orderType());
         snapshot.put("priority", create.priority());

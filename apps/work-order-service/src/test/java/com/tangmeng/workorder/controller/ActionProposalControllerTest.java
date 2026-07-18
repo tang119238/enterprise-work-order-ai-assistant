@@ -61,7 +61,7 @@ class ActionProposalControllerTest {
             .put("status", "PENDING_DISPATCH");
         when(service.create(eq(CONTEXT), any())).thenReturn(new ActionProposalResponse(
             PROPOSAL, "CREATE", null, "MEDIUM", "PENDING_CONFIRMATION",
-            null, after, 0L,
+            com.fasterxml.jackson.databind.node.NullNode.getInstance(), after, 0L,
             LocalDateTime.parse("2026-07-18T10:15:00")
         ));
 
@@ -75,7 +75,7 @@ class ActionProposalControllerTest {
             .andExpect(jsonPath("$.action_type").value("CREATE"))
             .andExpect(jsonPath("$.risk_level").value("MEDIUM"))
             .andExpect(jsonPath("$.status").value("PENDING_CONFIRMATION"))
-            .andExpect(jsonPath("$.before_snapshot").doesNotExist())
+            .andExpect(jsonPath("$.before_snapshot").value(org.hamcrest.Matchers.nullValue()))
             .andExpect(jsonPath("$.after_snapshot.work_order_no").value("WO-20260718-101"))
             .andExpect(jsonPath("$.expected_version").value(0))
             .andExpect(jsonPath("$.expires_at").value("2026-07-18T10:15:00"));
@@ -138,7 +138,6 @@ class ActionProposalControllerTest {
                 "title": "Cooling alarm",
                 "description": "Inspect cooling loop",
                 "project_id": "00000000-0000-0000-0000-000000010001",
-                "project_name": "North plant",
                 "space_path": "Building A/Floor 2",
                 "order_type": "INSPECTION",
                 "priority": "HIGH",

@@ -30,7 +30,6 @@ public sealed interface CreateProposalCommand permits
         String title,
         String description,
         UUID projectId,
-        String projectName,
         String spacePath,
         String orderType,
         String priority,
@@ -110,14 +109,13 @@ public sealed interface CreateProposalCommand permits
         if (target != null) {
             throw invalid();
         }
-        requireOnly(parameters, "work_order_no", "title", "description", "project_id", "project_name",
+        requireOnly(parameters, "work_order_no", "title", "description", "project_id",
             "space_path", "order_type", "priority", "source", "due_at");
         return new Create(
             requiredText(parameters, "work_order_no"),
             requiredText(parameters, "title"),
             requiredText(parameters, "description"),
             requiredUuid(parameters, "project_id"),
-            requiredText(parameters, "project_name"),
             requiredText(parameters, "space_path"),
             requiredText(parameters, "order_type"),
             requiredText(parameters, "priority"),

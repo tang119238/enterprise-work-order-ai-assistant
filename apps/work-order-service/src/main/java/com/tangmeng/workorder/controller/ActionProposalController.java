@@ -2,12 +2,15 @@ package com.tangmeng.workorder.controller;
 
 import com.tangmeng.workorder.api.ActionProposalRequest;
 import com.tangmeng.workorder.api.ActionProposalResponse;
+import com.tangmeng.workorder.api.ApiError;
 import com.tangmeng.workorder.command.ActionProposalService;
 import com.tangmeng.workorder.security.TenantContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -19,6 +22,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class ActionProposalController {
 
     private final ActionProposalService service;
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+    public ApiError invalidBody(HttpMessageNotReadableException exception) {
+        return ApiError.of("INVALID_COMMAND", "Invalid command");
+    }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
