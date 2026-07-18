@@ -1,6 +1,7 @@
 package com.tangmeng.workorder.integration;
 
 import com.tangmeng.workorder.service.WorkOrderQueryService;
+import com.tangmeng.workorder.security.TenantContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -12,9 +13,27 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.Set;
+import java.util.UUID;
+
 @Testcontainers(disabledWithoutDocker = true)
 @SpringBootTest
 class WorkOrderPostgresIntegrationTest {
+
+    private static final TenantContext TENANT_A = new TenantContext(
+        UUID.fromString("11111111-1111-1111-1111-111111111111"),
+        UUID.fromString("00000000-0000-0000-0000-000000009001"),
+        "integration-user",
+        Set.of("DISPATCHER"),
+        Set.of(
+            UUID.fromString("00000000-0000-0000-0000-000000010001"),
+            UUID.fromString("00000000-0000-0000-0000-000000010002"),
+            UUID.fromString("00000000-0000-0000-0000-000000010003")
+        ),
+        Set.of("work-order:read"),
+        "integration-request",
+        "integration-trace"
+    );
 
     @Container
     @ServiceConnection
@@ -36,7 +55,7 @@ class WorkOrderPostgresIntegrationTest {
 
     @Test
     void seededReworkOrderResolvesItsChain() {
-        assertThat(service.reworkChain("WO-20260718-008"))
+        assertThat(service.reworkChain(TENANT_A, "WO-20260718-008"))
             .extracting(order -> order.getWorkOrderNo())
             .containsExactly("WO-20260718-007", "WO-20260718-008");
     }

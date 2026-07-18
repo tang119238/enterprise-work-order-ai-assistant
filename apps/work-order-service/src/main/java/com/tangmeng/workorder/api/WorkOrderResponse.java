@@ -3,8 +3,13 @@ package com.tangmeng.workorder.api;
 import com.tangmeng.workorder.domain.WorkOrderEntity;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 public record WorkOrderResponse(
+    UUID id,
+    UUID projectId,
+    UUID assigneeId,
+    long version,
     String workOrderNo,
     String title,
     String description,
@@ -23,6 +28,10 @@ public record WorkOrderResponse(
 ) {
     public static WorkOrderResponse from(WorkOrderEntity entity) {
         return new WorkOrderResponse(
+            entity.getId(),
+            entity.getProjectId(),
+            entity.getAssigneeId(),
+            entity.getVersion(),
             entity.getWorkOrderNo(),
             entity.getTitle(),
             entity.getDescription(),

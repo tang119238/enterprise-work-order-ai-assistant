@@ -19,6 +19,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -67,8 +68,9 @@ class WorkOrderAuthorizationTest {
     void hidesInaccessibleOrderWithStable404() throws Exception {
         Jwt jwt = jwt("active");
         when(jwtDecoder.decode("active")).thenReturn(jwt);
-        when(resolver.resolve(jwt)).thenReturn(context(Set.of("DISPATCHER"), Set.of(PROJECT)));
-        when(service.get("WO-OTHER-TENANT"))
+        TenantContext context = context(Set.of("DISPATCHER"), Set.of(PROJECT));
+        when(resolver.resolve(jwt)).thenReturn(context);
+        when(service.get(eq(context), eq("WO-OTHER-TENANT")))
             .thenThrow(new WorkOrderNotFoundException("WO-OTHER-TENANT"));
 
         mvc.perform(get("/api/work-orders/WO-OTHER-TENANT")

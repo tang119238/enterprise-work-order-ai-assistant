@@ -6,49 +6,87 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.tangmeng.workorder.domain.WorkOrderEntity;
 import com.tangmeng.workorder.mapper.WorkOrderMapper;
+import com.tangmeng.workorder.security.TenantContext;
+import com.tangmeng.workorder.tenant.TenantTransaction;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 public class WorkOrderQueryService {
 
     private final WorkOrderMapper mapper;
+    private final TenantTransaction transactions;
 
-    public WorkOrderEntity get(String workOrderNo) {
-        WorkOrderEntity entity = mapper.selectById(workOrderNo);
+    public WorkOrderEntity get(TenantContext context, String workOrderNo) {
+        return transactions.required(context, () -> getScoped(context, workOrderNo));
+    }
+
+    public IPage<WorkOrderEntity> search(
+        TenantContext context,
+        WorkOrderSearchCriteria criteria,
+        int page,
+        int size
+    ) {
+        return transactions.required(context, () -> {
+            if (context.projectIds().isEmpty()) {
+                return emptyPage(page, size);
+            }
+            LambdaQueryWrapper<WorkOrderEntity> query = scopedQuery(context);
+            query.eq(StringUtils.hasText(criteria.status()), WorkOrderEntity::getStatus, criteria.status())
+                .eq(StringUtils.hasText(criteria.priority()), WorkOrderEntity::getPriority, criteria.priority())
+                .eq(StringUtils.hasText(criteria.projectName()), WorkOrderEntity::getProjectName, criteria.projectName())
+                .eq(StringUtils.hasText(criteria.assigneeName()), WorkOrderEntity::getAssigneeName, criteria.assigneeName())
+                .ge(criteria.createdFrom() != null, WorkOrderEntity::getCreatedAt, criteria.createdFrom())
+                .le(criteria.createdTo() != null, WorkOrderEntity::getCreatedAt, criteria.createdTo())
+                .orderByDesc(WorkOrderEntity::getCreatedAt);
+            return mapper.selectPage(Page.of(page + 1L, size), query);
+        });
+    }
+
+    public List<WorkOrderEntity> reworkChain(TenantContext context, String workOrderNo) {
+        return transactions.required(context, () -> {
+            WorkOrderEntity current = getScoped(context, workOrderNo);
+            UUID rootId = current.getRootWorkOrderId() == null
+                ? current.getId()
+                : current.getRootWorkOrderId();
+            LambdaQueryWrapper<WorkOrderEntity> query = scopedQuery(context);
+            query.and(wrapper -> wrapper
+                    .eq(WorkOrderEntity::getId, rootId)
+                    .or()
+                    .eq(WorkOrderEntity::getRootWorkOrderId, rootId))
+                .orderByAsc(WorkOrderEntity::getCreatedAt);
+            return mapper.selectList(query);
+        });
+    }
+
+    private WorkOrderEntity getScoped(TenantContext context, String workOrderNo) {
+        if (context.projectIds().isEmpty()) {
+            throw new WorkOrderNotFoundException(workOrderNo);
+        }
+        LambdaQueryWrapper<WorkOrderEntity> query = scopedQuery(context);
+        query.eq(WorkOrderEntity::getWorkOrderNo, workOrderNo);
+        WorkOrderEntity entity = mapper.selectOne(query);
         if (entity == null) {
             throw new WorkOrderNotFoundException(workOrderNo);
         }
         return entity;
     }
 
-    public IPage<WorkOrderEntity> search(WorkOrderSearchCriteria criteria, int page, int size) {
+    private static LambdaQueryWrapper<WorkOrderEntity> scopedQuery(TenantContext context) {
         LambdaQueryWrapper<WorkOrderEntity> query = Wrappers.lambdaQuery();
-        query.eq(StringUtils.hasText(criteria.status()), WorkOrderEntity::getStatus, criteria.status())
-            .eq(StringUtils.hasText(criteria.priority()), WorkOrderEntity::getPriority, criteria.priority())
-            .eq(StringUtils.hasText(criteria.projectName()), WorkOrderEntity::getProjectName, criteria.projectName())
-            .eq(StringUtils.hasText(criteria.assigneeName()), WorkOrderEntity::getAssigneeName, criteria.assigneeName())
-            .ge(criteria.createdFrom() != null, WorkOrderEntity::getCreatedAt, criteria.createdFrom())
-            .le(criteria.createdTo() != null, WorkOrderEntity::getCreatedAt, criteria.createdTo())
-            .orderByDesc(WorkOrderEntity::getCreatedAt);
-        return mapper.selectPage(Page.of(page + 1L, size), query);
+        query.eq(WorkOrderEntity::getTenantId, context.tenantId())
+            .in(WorkOrderEntity::getProjectId, context.projectIds());
+        return query;
     }
 
-    public List<WorkOrderEntity> reworkChain(String workOrderNo) {
-        WorkOrderEntity current = get(workOrderNo);
-        String rootWorkOrderNo = StringUtils.hasText(current.getRootWorkOrderNo())
-            ? current.getRootWorkOrderNo()
-            : current.getWorkOrderNo();
-        LambdaQueryWrapper<WorkOrderEntity> query = Wrappers.lambdaQuery();
-        query.and(wrapper -> wrapper
-                .eq(WorkOrderEntity::getWorkOrderNo, rootWorkOrderNo)
-                .or()
-                .eq(WorkOrderEntity::getRootWorkOrderNo, rootWorkOrderNo))
-            .orderByAsc(WorkOrderEntity::getCreatedAt);
-        return mapper.selectList(query);
+    private static IPage<WorkOrderEntity> emptyPage(int page, int size) {
+        Page<WorkOrderEntity> result = Page.of(page + 1L, size, 0);
+        result.setRecords(List.of());
+        return result;
     }
 }
