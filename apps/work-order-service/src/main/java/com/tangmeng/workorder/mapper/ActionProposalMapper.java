@@ -23,13 +23,21 @@ public interface ActionProposalMapper extends BaseMapper<ActionProposalEntity> {
     @Results(id = "actionProposalResult", value = {
         @Result(column = "id", property = "id", typeHandler = UuidTypeHandler.class),
         @Result(column = "tenant_id", property = "tenantId", typeHandler = UuidTypeHandler.class),
+        @Result(column = "action_type", property = "actionType"),
         @Result(column = "target_id", property = "targetId", typeHandler = UuidTypeHandler.class),
         @Result(column = "requested_by", property = "requestedBy", typeHandler = UuidTypeHandler.class),
         @Result(column = "confirmed_by", property = "confirmedBy", typeHandler = UuidTypeHandler.class),
         @Result(column = "command_payload", property = "commandPayload", typeHandler = JsonNodeTypeHandler.class),
         @Result(column = "before_snapshot", property = "beforeSnapshot", typeHandler = JsonNodeTypeHandler.class),
         @Result(column = "after_snapshot", property = "afterSnapshot", typeHandler = JsonNodeTypeHandler.class),
-        @Result(column = "execution_result", property = "executionResult", typeHandler = JsonNodeTypeHandler.class)
+        @Result(column = "risk_level", property = "riskLevel"),
+        @Result(column = "status", property = "status"),
+        @Result(column = "expected_version", property = "expectedVersion"),
+        @Result(column = "expires_at", property = "expiresAt"),
+        @Result(column = "execution_result", property = "executionResult", typeHandler = JsonNodeTypeHandler.class),
+        @Result(column = "error_code", property = "errorCode"),
+        @Result(column = "created_at", property = "createdAt"),
+        @Result(column = "updated_at", property = "updatedAt")
     })
     ActionProposalEntity selectProposalById(
         @Param("tenantId") UUID tenantId,

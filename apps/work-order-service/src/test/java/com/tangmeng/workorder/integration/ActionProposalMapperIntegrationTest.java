@@ -35,6 +35,10 @@ class ActionProposalMapperIntegrationTest {
     private static final UUID USER = UUID.fromString("00000000-0000-0000-0000-000000009001");
     private static final UUID PROJECT = UUID.fromString("00000000-0000-0000-0000-000000010001");
     private static final UUID PROPOSAL = UUID.fromString("00000000-0000-0000-0000-000000009301");
+    private static final UUID TARGET = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    private static final LocalDateTime EXPIRES_AT = LocalDateTime.parse("2026-07-18T12:15:00.123456");
+    private static final LocalDateTime CREATED_AT = LocalDateTime.parse("2026-07-18T12:00:00.234567");
+    private static final LocalDateTime UPDATED_AT = LocalDateTime.parse("2026-07-18T12:01:00.345678");
     private static final Path ROLE_BOOTSTRAP =
         Path.of("../../infra/postgres/init/001_roles.sql").toAbsolutePath();
 
@@ -89,18 +93,21 @@ class ActionProposalMapperIntegrationTest {
         ActionProposalEntity inserted = ActionProposalEntity.builder()
             .id(PROPOSAL)
             .tenantId(TENANT)
-            .actionType("CREATE")
+            .actionType("UPDATE")
+            .targetId(TARGET)
             .commandPayload(objectMapper.createObjectNode().put("title", "round-trip"))
             .beforeSnapshot(NullNode.getInstance())
             .afterSnapshot(objectMapper.createObjectNode().put("status", "PENDING_DISPATCH"))
-            .riskLevel("MEDIUM")
-            .status("PENDING_CONFIRMATION")
+            .riskLevel("HIGH")
+            .status("FAILED")
             .requestedBy(USER)
-            .expectedVersion(0L)
-            .expiresAt(LocalDateTime.parse("2026-07-18T12:15:00"))
-            .createdAt(LocalDateTime.parse("2026-07-18T12:00:00"))
-            .updatedAt(LocalDateTime.parse("2026-07-18T12:00:00"))
+            .confirmedBy(USER)
+            .expectedVersion(7L)
+            .expiresAt(EXPIRES_AT)
+            .createdAt(CREATED_AT)
+            .updatedAt(UPDATED_AT)
             .executionResult(null)
+            .errorCode("ROUND_TRIP_ERROR")
             .build();
 
         ActionProposalEntity reloaded = transactions.required(context, () -> {
@@ -108,9 +115,22 @@ class ActionProposalMapperIntegrationTest {
             return mapper.selectProposalById(TENANT, PROPOSAL);
         });
 
+        assertThat(reloaded.getId()).isEqualTo(PROPOSAL);
+        assertThat(reloaded.getTenantId()).isEqualTo(TENANT);
+        assertThat(reloaded.getActionType()).isEqualTo("UPDATE");
+        assertThat(reloaded.getTargetId()).isEqualTo(TARGET);
         assertThat(reloaded.getCommandPayload().get("title").asText()).isEqualTo("round-trip");
         assertThat(reloaded.getBeforeSnapshot().isNull()).isTrue();
         assertThat(reloaded.getAfterSnapshot().get("status").asText()).isEqualTo("PENDING_DISPATCH");
+        assertThat(reloaded.getRiskLevel()).isEqualTo("HIGH");
+        assertThat(reloaded.getStatus()).isEqualTo("FAILED");
+        assertThat(reloaded.getRequestedBy()).isEqualTo(USER);
+        assertThat(reloaded.getConfirmedBy()).isEqualTo(USER);
+        assertThat(reloaded.getExpectedVersion()).isEqualTo(7L);
+        assertThat(reloaded.getExpiresAt()).isEqualTo(EXPIRES_AT);
         assertThat(reloaded.getExecutionResult()).isNull();
+        assertThat(reloaded.getErrorCode()).isEqualTo("ROUND_TRIP_ERROR");
+        assertThat(reloaded.getCreatedAt()).isEqualTo(CREATED_AT);
+        assertThat(reloaded.getUpdatedAt()).isEqualTo(UPDATED_AT);
     }
 }
