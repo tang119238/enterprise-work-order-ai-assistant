@@ -5,11 +5,18 @@ import org.springframework.core.io.ClassPathResource;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class MigrationContractTest {
+
+    static final List<String> TENANT_SCOPED_TABLES = List.of(
+        "tenant_membership", "project", "project_scope", "work_order", "action_proposal",
+        "work_order_assignment", "work_order_event", "idempotency_record", "outbox_event", "inbox_message"
+    );
 
     @Test
     void migrationsCreateSchemaAndExactlyFiftyDeterministicRows() throws IOException {
@@ -68,8 +75,7 @@ class MigrationContractTest {
             "version BIGINT NOT NULL DEFAULT 0",
             "accepted_at TIMESTAMP"
         );
-        for (String table : List.of("work_order", "action_proposal", "work_order_event",
-                "work_order_assignment", "idempotency_record", "outbox_event", "inbox_message")) {
+        for (String table : TENANT_SCOPED_TABLES) {
             assertThat(rlsSql).contains(
                 "ALTER TABLE " + table + " ENABLE ROW LEVEL SECURITY",
                 "ALTER TABLE " + table + " FORCE ROW LEVEL SECURITY",
@@ -83,6 +89,23 @@ class MigrationContractTest {
             "WO-20260718-025",
             "WO-20260718-026",
             "root_work_order_id"
+        );
+    }
+
+    @Test
+    void tenantIntegrationUsesProductionRoleBootstrapAndSingleConnection() throws IOException {
+        Path integrationTest = Path.of(
+            "src/test/java/com/tangmeng/workorder/integration/TenantSchemaIntegrationTest.java"
+        );
+
+        String source = Files.readString(integrationTest);
+
+        assertThat(source).contains(
+            "withCopyFileToContainer",
+            "infra/postgres/init/001_roles.sql",
+            "work_order_app",
+            "flyway_owner",
+            "ConnectionCallback"
         );
     }
 }
