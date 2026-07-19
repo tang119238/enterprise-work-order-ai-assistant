@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +22,23 @@ class Settings(BaseSettings):
     llm_fallback_enabled: bool = True
     work_order_base_url: str = "http://localhost:8080"
     knowledge_path: Path = Path("knowledge/policies")
+    ai_database_url: str = (
+        "postgresql+asyncpg://ai_app:ai_app_dev@localhost:5432/workorders"
+    )
+    ai_migration_database_url: str = (
+        "postgresql+asyncpg://flyway_owner:flyway_owner_dev@localhost:5432/workorders"
+    )
+    embedding_provider: str = "local"
+    embedding_model: str = "BAAI/bge-small-zh-v1.5"
+    embedding_dimensions: Literal[512] = 512
+    fastembed_cache_path: Path = Path("/models")
+
+    @field_validator("embedding_dimensions", mode="before")
+    @classmethod
+    def parse_embedding_dimensions(cls, value: object) -> object:
+        if value == "512":
+            return 512
+        return value
 
     def api_key_value(self) -> str:
         return self.llm_api_key.get_secret_value().strip() if self.llm_api_key else ""

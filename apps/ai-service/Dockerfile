@@ -9,7 +9,9 @@ COPY apps/ai-service/pyproject.toml ./pyproject.toml
 RUN python -m pip install --upgrade pip \
     && python -m pip install . \
     && groupadd --system app \
-    && useradd --system --gid app --home-dir /nonexistent --shell /usr/sbin/nologin app
+    && useradd --system --gid app --home-dir /nonexistent --shell /usr/sbin/nologin app \
+    && mkdir -p /models \
+    && chown app:app /models
 COPY apps/ai-service/app ./app
 COPY knowledge ./knowledge
 

@@ -2,7 +2,7 @@ name: enterprise-work-order-ai-assistant
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: workorders
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -55,10 +55,15 @@ services:
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
       LLM_FALLBACK_ENABLED: ${LLM_FALLBACK_ENABLED:-true}
       WORK_ORDER_BASE_URL: http://work-order-service:8080
-      AI_DB_URL: postgresql://postgres:5432/workorders
-      AI_DB_USERNAME: ai_app
-      AI_DB_PASSWORD: ${AI_DB_PASSWORD:-ai_app_dev}
+      AI_DATABASE_URL: postgresql+asyncpg://ai_app:${AI_DB_PASSWORD:-ai_app_dev}@postgres:5432/workorders
+      AI_MIGRATION_DATABASE_URL: postgresql+asyncpg://flyway_owner:${FLYWAY_PASSWORD:-flyway_owner_dev}@postgres:5432/workorders
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-512}
+      FASTEMBED_CACHE_PATH: /models
       KNOWLEDGE_PATH: /app/knowledge/policies
+    volumes:
+      - fastembed-cache:/models
     depends_on:
       work-order-service:
         condition: service_healthy
@@ -78,3 +83,4 @@ services:
 
 volumes:
   work-order-data:
+  fastembed-cache:
