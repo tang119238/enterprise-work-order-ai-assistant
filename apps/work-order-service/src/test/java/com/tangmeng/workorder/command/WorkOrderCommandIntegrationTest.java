@@ -1,6 +1,7 @@
 package com.tangmeng.workorder.command;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.tangmeng.workorder.api.WorkOrderExecutionResponse;
 import com.tangmeng.workorder.domain.ActionProposalEntity;
@@ -362,6 +363,19 @@ class WorkOrderCommandIntegrationTest {
         assertThat(changed.getValue().getVersion()).isEqualTo(8L);
         if ("ASSIGN".equals(action)) {
             verify(repository).insertAssignment(TENANT, TARGET, USER, "dispatch", USER, NOW);
+        }
+        if ("COMPLETE".equals(action)) {
+            ArgumentCaptor<JsonNode> outboxPayload = ArgumentCaptor.forClass(JsonNode.class);
+            verify(repository).insertOutbox(
+                eq(TENANT), eq(TARGET), eq("WORK_ORDER_COMPLETED"),
+                outboxPayload.capture(), eq(NOW)
+            );
+            assertThat(outboxPayload.getValue().path("attachments_summary").isArray()).isTrue();
+            assertThat(outboxPayload.getValue().path("attachments_summary").isEmpty()).isTrue();
+            assertThat(outboxPayload.getValue().path("inspection_round").asInt()).isEqualTo(1);
+            assertThat(outboxPayload.getValue().toString()).doesNotContain(
+                "attachment_url", "database_url", "password", "credential"
+            );
         }
     }
 

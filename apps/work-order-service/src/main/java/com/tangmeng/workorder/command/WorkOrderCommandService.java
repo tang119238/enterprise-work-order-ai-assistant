@@ -199,7 +199,16 @@ public class WorkOrderCommandService {
             .eventType(eventType).commandType(proposal.getActionType())
             .beforeSnapshot(before).afterSnapshot(after).actorId(context.userId())
             .requestId(context.requestId()).traceId(context.traceId()).createdAt(now).build()));
-        requireOne(repository.insertOutbox(context.tenantId(), changed.getId(), eventType, after, now));
+        JsonNode outboxPayload = after;
+        if ("WORK_ORDER_COMPLETED".equals(eventType)) {
+            ObjectNode qualityPayload = after.deepCopy();
+            qualityPayload.set("attachments_summary", objectMapper.createArrayNode());
+            qualityPayload.put("inspection_round", 1);
+            outboxPayload = qualityPayload;
+        }
+        requireOne(repository.insertOutbox(
+            context.tenantId(), changed.getId(), eventType, outboxPayload, now
+        ));
 
         WorkOrderExecutionResponse response = new WorkOrderExecutionResponse(
             proposalId, changed.getId(), changed.getWorkOrderNo(), proposal.getActionType(),
@@ -451,6 +460,8 @@ public class WorkOrderCommandService {
         put(n,"project_name",e.getProjectName()); put(n,"space_path",e.getSpacePath()); put(n,"order_type",e.getOrderType());
         put(n,"priority",e.getPriority()); put(n,"status",e.getStatus()); put(n,"assignee_id",e.getAssigneeId());
         put(n,"assignee_name",e.getAssigneeName()); put(n,"source",e.getSource()); n.put("version",e.getVersion());
+        put(n,"root_work_order_id",e.getRootWorkOrderId()); put(n,"root_work_order_no",e.getRootWorkOrderNo());
+        put(n,"rework_reason",e.getReworkReason());
         put(n,"accepted_at",e.getAcceptedAt()); put(n,"created_by",e.getCreatedBy()); put(n,"updated_by",e.getUpdatedBy());
         put(n,"created_at",e.getCreatedAt()); put(n,"due_at",e.getDueAt()); put(n,"completed_at",e.getCompletedAt());
         put(n,"cancelled_at",e.getCancelledAt()); put(n,"cancel_reason",e.getCancelReason());

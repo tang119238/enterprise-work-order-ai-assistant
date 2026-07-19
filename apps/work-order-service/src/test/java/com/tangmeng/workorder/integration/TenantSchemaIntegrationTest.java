@@ -1,5 +1,7 @@
 package com.tangmeng.workorder.integration;
 
+import com.tangmeng.workorder.quality.QualityOutboxService;
+import com.tangmeng.workorder.security.TenantContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,6 +23,12 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,6 +48,8 @@ class TenantSchemaIntegrationTest {
     private static final String USER_ID = "00000000-0000-0000-0000-000000009001";
     private static final String WORK_ORDER_B = "00000000-0000-0000-0000-000000000026";
     private static final String PROJECT_B = "00000000-0000-0000-0000-000000020001";
+    private static final UUID QUALITY_EVENT =
+        UUID.fromString("00000000-0000-0000-0000-000000009111");
     private static final Path ROLE_BOOTSTRAP =
         Path.of("../../infra/postgres/init/001_roles.sql").toAbsolutePath();
 
@@ -67,6 +77,9 @@ class TenantSchemaIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private QualityOutboxService qualityOutboxService;
 
     @BeforeEach
     void seedTenantFixtures() throws SQLException {
@@ -142,6 +155,19 @@ class TenantSchemaIntegrationTest {
                     '00000000-0000-0000-0000-000000009109', '00000000-0000-0000-0000-000000009301', 'ACCEPT',
                     'PASS', 'PASS', 'fixture', '00000000-0000-0000-0000-000000009001')
                 on conflict (tenant_id, id) do nothing
+                """);
+            statement.executeUpdate("""
+                insert into outbox_event (id, tenant_id, aggregate_id, aggregate_type, event_type, payload,
+                    status, occurred_at, available_at, published_at, attempts)
+                values ('00000000-0000-0000-0000-000000009111', '11111111-1111-1111-1111-111111111111',
+                    '00000000-0000-0000-0000-000000000001', 'WORK_ORDER', 'WORK_ORDER_COMPLETED',
+                    '{"id":"00000000-0000-0000-0000-000000000001",'
+                    '"tenant_id":"11111111-1111-1111-1111-111111111111",'
+                    '"status":"COMPLETED","version":0,"title":"Synthetic completion"}'::jsonb,
+                    'PENDING', current_timestamp - interval '1 minute', current_timestamp - interval '1 minute',
+                    null, 0)
+                on conflict (id) do update set status='PENDING', published_at=null, attempts=0,
+                    available_at=current_timestamp - interval '1 minute'
                 """);
         }
     }
@@ -254,6 +280,60 @@ class TenantSchemaIntegrationTest {
                 clearTenant(connection);
             }
         });
+    }
+
+    @Test
+    void twoQualityConsumersClaimOneCompletionEventOnlyOnce() throws Exception {
+        TenantContext context = new TenantContext(
+            UUID.fromString(TENANT_A), UUID.fromString(USER_ID), "quality-service",
+            Set.of("AI_SERVICE"), Set.of(), Set.of("quality:consume"),
+            "quality-request", "quality-trace"
+        );
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            CompletableFuture<List<QualityOutboxService.ClaimedQualityEvent>> first =
+                CompletableFuture.supplyAsync(() -> claimAfterBarrier(context, ready, start), executor);
+            CompletableFuture<List<QualityOutboxService.ClaimedQualityEvent>> second =
+                CompletableFuture.supplyAsync(() -> claimAfterBarrier(context, ready, start), executor);
+            ready.await();
+            start.countDown();
+
+            List<QualityOutboxService.ClaimedQualityEvent> claimed = Stream
+                .concat(first.get().stream(), second.get().stream())
+                .toList();
+
+            assertThat(claimed).singleElement()
+                .extracting(QualityOutboxService.ClaimedQualityEvent::eventId)
+                .isEqualTo(QUALITY_EVENT);
+            try (Connection connection = adminConnection(); PreparedStatement statement =
+                     connection.prepareStatement("select attempts from outbox_event where id=?")) {
+                statement.setObject(1, QUALITY_EVENT);
+                try (ResultSet result = statement.executeQuery()) {
+                    assertThat(result.next()).isTrue();
+                    assertThat(result.getInt(1)).isEqualTo(1);
+                }
+            }
+            assertThat(qualityOutboxService.acknowledge(context, QUALITY_EVENT)).isTrue();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private List<QualityOutboxService.ClaimedQualityEvent> claimAfterBarrier(
+        TenantContext context,
+        CountDownLatch ready,
+        CountDownLatch start
+    ) {
+        ready.countDown();
+        try {
+            start.await();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("quality claim test interrupted", exception);
+        }
+        return qualityOutboxService.claim(context, 1);
     }
 
     private static Connection adminConnection() throws SQLException {

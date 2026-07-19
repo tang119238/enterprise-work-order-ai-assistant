@@ -11,6 +11,8 @@ import org.springframework.core.convert.converter.Converter;
 import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AbstractAuthenticationToken;
+import org.springframework.security.authorization.AuthorizationManagers;
+import org.springframework.security.authorization.AuthorityAuthorizationManager;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -49,6 +51,11 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(authorize -> authorize
                 .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
+                .requestMatchers("/internal/quality-events/**")
+                    .access(AuthorizationManagers.allOf(
+                        AuthorityAuthorizationManager.hasAuthority("SCOPE_quality:consume"),
+                        AuthorityAuthorizationManager.hasAuthority("AI_SERVICE")
+                    ))
                 .requestMatchers("/api/**", "/internal/**").hasAnyAuthority(TENANT_ROLES)
                 .anyRequest().denyAll())
             .oauth2ResourceServer(resourceServer -> resourceServer
