@@ -7,6 +7,8 @@ Primitive = str | int | float | bool | None
 
 
 class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     session_id: str = Field(min_length=1, max_length=100)
     message: str = Field(min_length=1, max_length=2000)
 

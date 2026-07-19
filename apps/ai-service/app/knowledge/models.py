@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -68,3 +69,31 @@ class WorkerRunResult(BaseModel):
     retried: int
     failed: int
     completed_at: datetime
+
+
+class ActiveKnowledgeChunk(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    chunk_id: str
+    document_id: str
+    document_key: str
+    title: str
+    section: str
+    text: str
+    ordinal: int
+    document_version: int
+    content_hash: str
+
+
+class RetrievalHit(ActiveKnowledgeChunk):
+    bm25_rank: int | None = None
+    vector_rank: int | None = None
+    rrf_score: float
+
+
+class RetrievalResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    hits: tuple[RetrievalHit, ...]
+    mode: Literal["hybrid", "bm25", "vector", "none"]
+    warnings: tuple[str, ...] = ()

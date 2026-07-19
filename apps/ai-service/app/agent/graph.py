@@ -2,6 +2,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Protocol
+from uuid import UUID
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -20,14 +21,19 @@ from app.api.models import (
     WorkOrderRecord,
     WorkOrderSearchPage,
 )
-from app.knowledge.models import SearchHit
+from app.knowledge.models import RetrievalResult
 from app.llm.contracts import LLMMessage, LLMRequest, LLMResult
 from app.llm.gateway import LLMGateway
 from app.tools.work_order_client import WorkOrderToolError
 
 
 class PolicyIndex(Protocol):
-    def search(self, query: str, limit: int = 5) -> list[SearchHit]: ...
+    async def search(
+        self,
+        tenant_id: UUID,
+        query: str,
+        limit: int = 5,
+    ) -> RetrievalResult: ...
 
 
 class WorkOrderTools(Protocol):
@@ -49,7 +55,11 @@ def build_graph(
     dependencies: AgentDependencies,
 ) -> CompiledStateGraph[AgentState, None, AgentState, AgentState]:
     async def normalize_input(state: AgentState) -> dict[str, object]:
+        tenant_id = state.get("tenant_id")
+        if not isinstance(tenant_id, UUID):
+            raise TypeError("authenticated tenant_id must be a UUID")
         return {
+            "tenant_id": tenant_id,
             "message": state["message"].strip(),
             "request_id": str(uuid.uuid4()),
             "started_at": time.perf_counter(),
@@ -63,7 +73,16 @@ def build_graph(
         return {"route": route_intent(state["message"])}
 
     async def retrieve_knowledge(state: AgentState) -> dict[str, object]:
-        return {"knowledge_hits": dependencies.index.search(state["message"], limit=5)}
+        retrieval = await dependencies.index.search(
+            state["tenant_id"],
+            state["message"],
+            limit=5,
+        )
+        return {
+            "knowledge_hits": list(retrieval.hits),
+            "retrieval_mode": retrieval.mode,
+            "warnings": [*state.get("warnings", []), *retrieval.warnings],
+        }
 
     async def call_work_order_tool(state: AgentState) -> dict[str, object]:
         work_order_no = extract_work_order_no(state["message"])
@@ -81,10 +100,14 @@ def build_graph(
             arguments = {}
         try:
             if name == "get_rework_chain":
+                if work_order_no is None:
+                    raise RuntimeError("work-order number routing invariant failed")
                 records: list[WorkOrderRecord] = (
                     await dependencies.work_order_client.get_rework_chain(work_order_no)
                 )
             elif name == "get_work_order":
+                if work_order_no is None:
+                    raise RuntimeError("work-order number routing invariant failed")
                 records = [await dependencies.work_order_client.get_work_order(work_order_no)]
             else:
                 filters = extract_search_filters(state["message"])

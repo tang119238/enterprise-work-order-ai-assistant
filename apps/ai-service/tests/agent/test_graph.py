@@ -1,24 +1,48 @@
+from uuid import UUID
+
 import pytest
 
 from app.agent.graph import AgentDependencies, build_graph
 from app.api.models import WorkOrderRecord, WorkOrderSearchPage
-from app.knowledge.models import SearchHit
+from app.knowledge.hybrid import HYBRID_RETRIEVAL_DEGRADED
+from app.knowledge.models import ActiveKnowledgeChunk, RetrievalHit, RetrievalResult
 from app.llm.gateway import LLMGateway
 from app.llm.offline import OfflineTemplateProvider
 
 
 class StubIndex:
-    def search(self, query: str, limit: int = 5) -> list[SearchHit]:
-        return [
-            SearchHit(
+    def __init__(self, *, degraded: bool = False) -> None:
+        self.degraded = degraded
+        self.calls: list[tuple[UUID, str, int]] = []
+
+    async def search(
+        self,
+        tenant_id: UUID,
+        query: str,
+        limit: int = 5,
+    ) -> RetrievalResult:
+        self.calls.append((tenant_id, query, limit))
+        hit = RetrievalHit(
+            **ActiveKnowledgeChunk(
                 chunk_id="rework-policy:1:0",
                 document_id="rework-policy",
+                document_key="rework-policy",
                 title="返工处理规则",
                 section="3.2 返工链路",
                 text="返工单必须关联根工单，并按创建时间展示完整链路。",
-                score=2.5,
-            )
-        ]
+                ordinal=0,
+                document_version=1,
+                content_hash="a" * 64,
+            ).model_dump(),
+            bm25_rank=1,
+            vector_rank=1,
+            rrf_score=2 / 61,
+        )
+        return RetrievalResult(
+            hits=(hit,),
+            mode="bm25" if self.degraded else "hybrid",
+            warnings=(HYBRID_RETRIEVAL_DEGRADED,) if self.degraded else (),
+        )
 
 
 class StubWorkOrderClient:
@@ -41,10 +65,13 @@ class StubWorkOrderClient:
         )
 
 
-def dependencies() -> AgentDependencies:
+TENANT_ID = UUID("11111111-1111-1111-1111-111111111111")
+
+
+def dependencies(index: StubIndex | None = None) -> AgentDependencies:
     offline = OfflineTemplateProvider()
     return AgentDependencies(
-        index=StubIndex(),
+        index=index or StubIndex(),
         work_order_client=StubWorkOrderClient(),
         gateway=LLMGateway(
             provider=offline,
@@ -58,7 +85,7 @@ def dependencies() -> AgentDependencies:
 @pytest.mark.asyncio
 async def test_knowledge_route_returns_real_citation_without_tool_call() -> None:
     result = await build_graph(dependencies()).ainvoke(
-        {"session_id": "demo", "message": "返工链路有什么规则？"}
+        {"tenant_id": TENANT_ID, "session_id": "demo", "message": "返工链路有什么规则？"}
     )
     response = result["response"]
 
@@ -70,7 +97,11 @@ async def test_knowledge_route_returns_real_citation_without_tool_call() -> None
 @pytest.mark.asyncio
 async def test_work_order_route_returns_deterministic_facts_and_tool_audit() -> None:
     result = await build_graph(dependencies()).ainvoke(
-        {"session_id": "demo", "message": "查询 WO-20260718-001 当前状态"}
+        {
+            "tenant_id": TENANT_ID,
+            "session_id": "demo",
+            "message": "查询 WO-20260718-001 当前状态",
+        }
     )
     response = result["response"]
 
@@ -83,7 +114,11 @@ async def test_work_order_route_returns_deterministic_facts_and_tool_audit() -> 
 @pytest.mark.asyncio
 async def test_combined_route_returns_rework_chain_and_policy_citation() -> None:
     result = await build_graph(dependencies()).ainvoke(
-        {"session_id": "demo", "message": "WO-20260718-008 为什么是返工单，怎么处理？"}
+        {
+            "tenant_id": TENANT_ID,
+            "session_id": "demo",
+            "message": "WO-20260718-008 为什么是返工单，怎么处理？",
+        }
     )
     response = result["response"]
 
@@ -91,6 +126,26 @@ async def test_combined_route_returns_rework_chain_and_policy_citation() -> None
     assert response.citations[0].document_id == "rework-policy"
     assert "WO-20260718-007" in response.answer
     assert "WO-20260718-008" in response.answer
+
+
+@pytest.mark.asyncio
+async def test_retrieval_uses_authenticated_tenant_and_propagates_degradation() -> None:
+    index = StubIndex(degraded=True)
+    result = await build_graph(dependencies(index)).ainvoke(
+        {"tenant_id": TENANT_ID, "session_id": "demo", "message": "返工规则是什么？"}
+    )
+
+    assert index.calls == [(TENANT_ID, "返工规则是什么？", 5)]
+    assert result["response"].warnings == [HYBRID_RETRIEVAL_DEGRADED]
+    assert result["retrieval_mode"] == "bm25"
+
+
+@pytest.mark.asyncio
+async def test_graph_rejects_missing_authenticated_tenant_context() -> None:
+    with pytest.raises((KeyError, TypeError, ValueError), match="tenant"):
+        await build_graph(dependencies()).ainvoke(
+            {"session_id": "demo", "message": "返工规则是什么？"}
+        )
 
 
 def sample_order(work_order_no: str, root: str | None = None) -> WorkOrderRecord:
