@@ -15,7 +15,10 @@ from app.knowledge.embedding.fastembed_provider import (
     FastEmbedEmbeddingProvider,
     FastEmbedModel,
 )
-from app.knowledge.embedding.openai_compatible import OpenAICompatibleEmbeddingProvider
+from app.knowledge.embedding.openai_compatible import (
+    OpenAICompatibleEmbeddingProvider,
+    valid_embedding_timeout,
+)
 
 SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"local", "openai_compatible", "disabled"})
 
@@ -43,7 +46,7 @@ async def build_embedding_provider(
     client: httpx.AsyncClient | None = None,
     fastembed_factory: Callable[..., FastEmbedModel] | None = None,
 ) -> EmbeddingProvider:
-    provider_name = settings.embedding_provider.strip().lower()
+    provider_name = settings.embedding_provider
     if provider_name not in SUPPORTED_EMBEDDING_PROVIDERS:
         raise EmbeddingConfigurationError
     if settings.embedding_dimensions != EMBEDDING_DIMENSIONS:
@@ -51,7 +54,7 @@ async def build_embedding_provider(
     if provider_name == "disabled":
         return DisabledEmbeddingProvider()
     if provider_name == "local":
-        if settings.embedding_model.strip() != FASTEMBED_MODEL_NAME:
+        if settings.embedding_model != FASTEMBED_MODEL_NAME:
             raise EmbeddingConfigurationError
         if not _usable_cache_path(settings.fastembed_cache_path):
             raise EmbeddingConfigurationError
@@ -65,7 +68,7 @@ async def build_embedding_provider(
             not settings.embedding_base_url.strip()
             or not settings.embedding_api_key_value()
             or not settings.embedding_model.strip()
-            or settings.embedding_timeout_seconds <= 0
+            or not valid_embedding_timeout(settings.embedding_timeout_seconds)
         ):
             raise EmbeddingConfigurationError
         provider = OpenAICompatibleEmbeddingProvider(

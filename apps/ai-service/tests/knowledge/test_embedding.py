@@ -4,6 +4,7 @@ import math
 import os
 import subprocess
 import sys
+import threading
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
@@ -244,6 +245,42 @@ async def test_fastembed_load_is_concurrency_safe() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fastembed_coalesces_one_failing_concurrent_load_wave_then_allows_retry() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    construction_count = 0
+    sentinel = "factory-secret-must-not-leak"
+
+    def failing_factory(**_: object) -> FakeFastEmbedModel:
+        nonlocal construction_count
+        construction_count += 1
+        entered.set()
+        assert release.wait(timeout=2)
+        raise RuntimeError(sentinel)
+
+    provider = FastEmbedEmbeddingProvider(
+        cache_path=Path("synthetic-cache"), model_factory=failing_factory
+    )
+    tasks = [asyncio.create_task(provider.embed([text])) for text in ["甲", "乙", "丙"]]
+    assert await asyncio.to_thread(entered.wait, 2)
+    await asyncio.sleep(0)
+    release.set()
+
+    failures = await asyncio.gather(*tasks, return_exceptions=True)
+
+    assert construction_count == 1
+    assert provider.loaded is False
+    assert all(isinstance(error, EmbeddingProviderUnavailableError) for error in failures)
+    assert {str(error) for error in failures} == {"Embedding provider is unavailable"}
+    assert all(sentinel not in str(error) for error in failures)
+
+    with pytest.raises(EmbeddingProviderUnavailableError):
+        await provider.embed(["later retry"])
+    assert construction_count == 2
+    assert provider.loaded is False
+
+
+@pytest.mark.asyncio
 async def test_fastembed_probe_rejects_wrong_dimension_and_does_not_mark_loaded() -> None:
     provider = fake_fastembed(FakeFastEmbedModel(lambda _: [1.0] * 384))
 
@@ -278,8 +315,8 @@ async def test_fastembed_empty_batch_is_deliberate_and_does_not_load() -> None:
 @pytest.mark.asyncio
 async def test_openai_provider_sends_standard_request_and_restores_index_order() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url == "https://embedding.example/v1/embeddings"
-        assert request.headers["authorization"] == "Bearer synthetic-key"
+        assert request.url == "https://embedding.example/api/v1/embeddings"
+        assert request.headers.get_list("authorization") == ["Bearer synthetic-key"]
         assert json.loads(request.content) == {
             "model": "synthetic-model",
             "input": ["甲", "乙"],
@@ -297,7 +334,7 @@ async def test_openai_provider_sends_standard_request_and_restores_index_order()
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = OpenAICompatibleEmbeddingProvider(
-            base_url="https://embedding.example/v1",
+            base_url="https://embedding.example/api/v1/",
             api_key="synthetic-key",
             model="synthetic-model",
             timeout_seconds=1.5,
@@ -308,6 +345,46 @@ async def test_openai_provider_sends_standard_request_and_restores_index_order()
     assert vectors[0][0] == 1.0
     assert vectors[1][1] == 1.0
     assert provider.loaded is True
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "ftp://embedding.example/v1",
+        "https:///v1",
+        "https://sentinel-secret@embedding.example/v1",
+        "https://embedding.example/v1?token=sentinel-secret",
+        "https://embedding.example/v1#sentinel-secret",
+        "http://host:sentinel-secret",
+    ],
+)
+def test_openai_rejects_unsafe_or_invalid_base_urls_without_leaking_them(
+    base_url: str,
+) -> None:
+    with pytest.raises(EmbeddingConfigurationError) as captured:
+        OpenAICompatibleEmbeddingProvider(
+            base_url=base_url,
+            api_key="sentinel-api-key",
+            model="sentinel-model",
+            timeout_seconds=1,
+        )
+
+    assert captured.value.code == "EMBEDDING_CONFIGURATION_INVALID"
+    assert str(captured.value) == "Embedding provider configuration is invalid"
+    assert "sentinel" not in str(captured.value)
+
+
+@pytest.mark.parametrize("timeout_seconds", [float("nan"), float("inf"), 0.0, -1.0, 121.0])
+def test_openai_rejects_nonfinite_nonpositive_or_excessive_timeout(
+    timeout_seconds: float,
+) -> None:
+    with pytest.raises(EmbeddingConfigurationError):
+        OpenAICompatibleEmbeddingProvider(
+            base_url="https://embedding.example/v1",
+            api_key="synthetic-key",
+            model="synthetic-model",
+            timeout_seconds=timeout_seconds,
+        )
 
 
 @pytest.mark.asyncio
@@ -368,7 +445,6 @@ async def test_openai_maps_timeout_network_and_status_to_stable_redacted_errors(
     secret = "sentinel-secret"
     text = "sentinel-input-text"
     response_body = "sentinel-response-body"
-    query = "sentinel-query-value"
 
     async def timeout_handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout(f"{secret} {text} {request.url}", request=request)
@@ -387,7 +463,7 @@ async def test_openai_maps_timeout_network_and_status_to_stable_redacted_errors(
     for handler, expected_type, expected_code in cases:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             provider = OpenAICompatibleEmbeddingProvider(
-                base_url=f"https://embedding.example/v1?token={query}",
+                base_url="https://embedding.example/v1",
                 api_key=secret,
                 model="synthetic-model",
                 timeout_seconds=0.1,
@@ -400,7 +476,6 @@ async def test_openai_maps_timeout_network_and_status_to_stable_redacted_errors(
         assert secret not in rendered
         assert text not in rendered
         assert response_body not in rendered
-        assert query not in rendered
 
 
 @pytest.mark.asyncio
@@ -502,6 +577,41 @@ async def test_registry_rejects_a_wrong_dimension_startup_probe() -> None:
         )
 
 
+@pytest.mark.parametrize("provider_name", ["LOCAL", " local", "local ", "disabled "])
+@pytest.mark.asyncio
+async def test_registry_rejects_provider_name_case_and_whitespace_aliases(
+    provider_name: str,
+) -> None:
+    with pytest.raises(EmbeddingConfigurationError):
+        await build_embedding_provider(
+            Settings(embedding_provider=provider_name, _env_file=None),
+            fastembed_factory=lambda **_: FakeFastEmbedModel(),
+        )
+
+
+@pytest.mark.parametrize("timeout_seconds", [float("nan"), float("inf"), 0.0, -1.0, 121.0])
+@pytest.mark.asyncio
+async def test_registry_rejects_invalid_openai_timeout_before_request(
+    timeout_seconds: float,
+) -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("invalid timeout must fail before any request")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(EmbeddingConfigurationError):
+            await build_embedding_provider(
+                Settings(
+                    embedding_provider="openai_compatible",
+                    embedding_model="synthetic-model",
+                    embedding_base_url="https://embedding.example/v1",
+                    embedding_api_key="synthetic-key",
+                    embedding_timeout_seconds=timeout_seconds,
+                    _env_file=None,
+                ),
+                client=client,
+            )
+
+
 @pytest.mark.asyncio
 async def test_registry_closes_owned_openai_client_when_probe_fails(
     monkeypatch: pytest.MonkeyPatch,
@@ -579,7 +689,39 @@ def test_embedding_settings_have_safe_public_defaults() -> None:
 
 
 def test_compose_passes_public_openai_embedding_configuration() -> None:
-    compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    assert "EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}" in compose
-    assert "EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}" in compose
-    assert "EMBEDDING_TIMEOUT_SECONDS: ${EMBEDDING_TIMEOUT_SECONDS:-30}" in compose
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "EMBEDDING_BASE_URL": "https://embedding.example/api/v1",
+            "EMBEDDING_API_KEY": "synthetic-compose-key",
+            "EMBEDDING_TIMEOUT_SECONDS": "17.5",
+        }
+    )
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(REPOSITORY_ROOT / "docker-compose.yml"),
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=REPOSITORY_ROOT,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    compose = json.loads(result.stdout)
+    ai_environment = compose["services"]["ai-service"]["environment"]
+
+    assert {
+        "EMBEDDING_BASE_URL": ai_environment["EMBEDDING_BASE_URL"],
+        "EMBEDDING_API_KEY": ai_environment["EMBEDDING_API_KEY"],
+        "EMBEDDING_TIMEOUT_SECONDS": ai_environment["EMBEDDING_TIMEOUT_SECONDS"],
+    } == {
+        "EMBEDDING_BASE_URL": "https://embedding.example/api/v1",
+        "EMBEDDING_API_KEY": "synthetic-compose-key",
+        "EMBEDDING_TIMEOUT_SECONDS": "17.5",
+    }

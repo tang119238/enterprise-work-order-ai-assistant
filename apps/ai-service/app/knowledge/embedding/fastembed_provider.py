@@ -37,6 +37,8 @@ class FastEmbedEmbeddingProvider:
         self._model: FastEmbedModel | None = None
         self._loaded = False
         self._load_lock = asyncio.Lock()
+        self._load_task: asyncio.Task[FastEmbedModel] | None = None
+        self._load_waiters = 0
 
     @property
     def model_key(self) -> str:
@@ -72,15 +74,27 @@ class FastEmbedEmbeddingProvider:
         async with self._load_lock:
             if self._model is not None and self._loaded:
                 return self._model
-            try:
-                model = await asyncio.to_thread(self._construct_and_probe)
-            except Exception as error:
-                if isinstance(error, EmbeddingError):
-                    raise
-                raise EmbeddingProviderUnavailableError from None
-            self._model = model
-            self._loaded = True
-            return model
+            task = self._load_task
+            if task is None:
+                task = asyncio.create_task(asyncio.to_thread(self._construct_and_probe))
+                self._load_task = task
+            self._load_waiters += 1
+        try:
+            model = await asyncio.shield(task)
+            async with self._load_lock:
+                if self._model is None:
+                    self._model = model
+                    self._loaded = True
+                return self._model
+        except Exception as error:
+            if isinstance(error, EmbeddingError):
+                raise
+            raise EmbeddingProviderUnavailableError from None
+        finally:
+            async with self._load_lock:
+                self._load_waiters -= 1
+                if self._load_waiters == 0 and self._load_task is task:
+                    self._load_task = None
 
     def _construct_and_probe(self) -> FastEmbedModel:
         model = self._model_factory(

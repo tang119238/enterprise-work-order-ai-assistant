@@ -1,3 +1,4 @@
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -15,6 +16,8 @@ from app.knowledge.embedding.base import (
     require_fixed_dimensions,
 )
 
+MAX_EMBEDDING_TIMEOUT_SECONDS = 120.0
+
 
 class OpenAICompatibleEmbeddingProvider:
     def __init__(
@@ -28,9 +31,25 @@ class OpenAICompatibleEmbeddingProvider:
         client: httpx.AsyncClient | None = None,
     ) -> None:
         require_fixed_dimensions(dimensions)
-        if not base_url.strip() or not api_key.strip() or not model.strip() or timeout_seconds <= 0:
+        if (
+            not base_url.strip()
+            or not api_key.strip()
+            or not model.strip()
+            or not valid_embedding_timeout(timeout_seconds)
+        ):
             raise EmbeddingConfigurationError
-        parsed_base_url = httpx.URL(base_url)
+        try:
+            parsed_base_url = httpx.URL(base_url)
+        except (httpx.InvalidURL, ValueError):
+            raise EmbeddingConfigurationError from None
+        if (
+            parsed_base_url.scheme not in {"http", "https"}
+            or not parsed_base_url.host
+            or parsed_base_url.userinfo
+            or parsed_base_url.query
+            or parsed_base_url.fragment
+        ):
+            raise EmbeddingConfigurationError
         self._endpoint = parsed_base_url.copy_with(
             path=f"{parsed_base_url.path.rstrip('/')}/embeddings"
         )
@@ -141,3 +160,11 @@ class OpenAICompatibleEmbeddingProvider:
             raise
         except (TypeError, ValueError):
             raise EmbeddingProviderBadResponseError from None
+
+
+def valid_embedding_timeout(timeout_seconds: float) -> bool:
+    return (
+        not isinstance(timeout_seconds, bool)
+        and math.isfinite(timeout_seconds)
+        and 0 < timeout_seconds <= MAX_EMBEDDING_TIMEOUT_SECONDS
+    )
