@@ -52,7 +52,7 @@ def test_offline_migration_renders_complete_fail_closed_schema_without_secrets()
             "-c",
             "alembic.ini",
             "upgrade",
-            "head",
+            "20260718_01",
             "--sql",
         ],
         cwd=AI_SERVICE_ROOT,

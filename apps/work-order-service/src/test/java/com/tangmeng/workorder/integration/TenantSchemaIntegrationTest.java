@@ -21,6 +21,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -29,7 +30,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @SpringBootTest
 class TenantSchemaIntegrationTest {
 
-    private static final List<String> TENANT_SCOPED_TABLES = MigrationContractTest.TENANT_SCOPED_TABLES;
+    private static final List<String> TENANT_SCOPED_TABLES = Stream.concat(
+        MigrationContractTest.TENANT_SCOPED_TABLES.stream(),
+        MigrationContractTest.QUALITY_TENANT_SCOPED_TABLES.stream()
+    ).toList();
 
     private static final String TENANT_A = "11111111-1111-1111-1111-111111111111";
     private static final String TENANT_B = "22222222-2222-2222-2222-222222222222";
@@ -123,6 +127,21 @@ class TenantSchemaIntegrationTest {
                 values ('00000000-0000-0000-0000-000000009108', '11111111-1111-1111-1111-111111111111',
                     'fixture', 'fixture-message', 'FIXTURE', '{}'::jsonb)
                 on conflict (id) do nothing
+                """);
+            statement.executeUpdate("""
+                insert into rectification_case (id, tenant_id, original_work_order_id, current_quality_result_id,
+                    inspection_round, status)
+                values ('00000000-0000-0000-0000-000000009109', '22222222-2222-2222-2222-222222222222',
+                    '00000000-0000-0000-0000-000000000026', '00000000-0000-0000-0000-000000009301', 1, 'PROPOSED')
+                on conflict (tenant_id, id) do nothing
+                """);
+            statement.executeUpdate("""
+                insert into quality_review_event (id, tenant_id, rectification_case_id, quality_result_id, decision,
+                    previous_verdict, reviewed_verdict, reason, actor_id)
+                values ('00000000-0000-0000-0000-000000009110', '22222222-2222-2222-2222-222222222222',
+                    '00000000-0000-0000-0000-000000009109', '00000000-0000-0000-0000-000000009301', 'ACCEPT',
+                    'PASS', 'PASS', 'fixture', '00000000-0000-0000-0000-000000009001')
+                on conflict (tenant_id, id) do nothing
                 """);
         }
     }
@@ -316,6 +335,19 @@ class TenantSchemaIntegrationTest {
                 insert into inbox_message (id, tenant_id, provider, external_message_id, message_type, payload)
                 values ('00000000-0000-0000-0000-000000009210', '%s', 'cross', 'cross-message', 'CROSS', '{}'::jsonb)
                 """.formatted(TENANT_B);
+            case "rectification_case" -> """
+                insert into rectification_case (id, tenant_id, original_work_order_id, current_quality_result_id,
+                    inspection_round, status)
+                values ('00000000-0000-0000-0000-000000009211', '%s', '%s',
+                    '00000000-0000-0000-0000-000000009302', 2, 'PROPOSED')
+                """.formatted(TENANT_B, WORK_ORDER_B);
+            case "quality_review_event" -> """
+                insert into quality_review_event (id, tenant_id, rectification_case_id, quality_result_id, decision,
+                    previous_verdict, reviewed_verdict, reason, actor_id)
+                values ('00000000-0000-0000-0000-000000009212', '%s',
+                    '00000000-0000-0000-0000-000000009109', '00000000-0000-0000-0000-000000009301',
+                    'ACCEPT', 'PASS', 'PASS', 'cross tenant', '%s')
+                """.formatted(TENANT_B, USER_ID);
             default -> throw new IllegalArgumentException("unknown tenant table: " + table);
         };
         try (Statement statement = connection.createStatement()) {

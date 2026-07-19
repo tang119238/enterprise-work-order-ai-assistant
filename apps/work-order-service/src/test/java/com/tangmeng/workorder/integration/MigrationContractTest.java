@@ -18,6 +18,10 @@ class MigrationContractTest {
         "work_order_assignment", "work_order_event", "idempotency_record", "outbox_event", "inbox_message"
     );
 
+    static final List<String> QUALITY_TENANT_SCOPED_TABLES = List.of(
+        "rectification_case", "quality_review_event"
+    );
+
     @Test
     void migrationsCreateSchemaAndExactlyFiftyDeterministicRows() throws IOException {
         ClassPathResource schema = new ClassPathResource(
