@@ -51,7 +51,7 @@ class OpenAICompatibleEmbeddingProvider:
         ):
             raise EmbeddingConfigurationError
         self._endpoint = parsed_base_url.copy_with(
-            path=f"{parsed_base_url.path.rstrip('/')}/embeddings"
+            raw_path=parsed_base_url.raw_path.rstrip(b"/") + b"/embeddings"
         )
         self._api_key = api_key
         self._model = model

@@ -93,7 +93,7 @@ class FastEmbedEmbeddingProvider:
         finally:
             async with self._load_lock:
                 self._load_waiters -= 1
-                if self._load_waiters == 0 and self._load_task is task:
+                if self._load_waiters == 0 and self._load_task is task and task.done():
                     self._load_task = None
 
     def _construct_and_probe(self) -> FastEmbedModel:

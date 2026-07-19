@@ -245,6 +245,39 @@ async def test_fastembed_load_is_concurrency_safe() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fastembed_waiter_cancellation_does_not_duplicate_inflight_load() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    construction_count = 0
+
+    def blocking_factory(**_: object) -> FakeFastEmbedModel:
+        nonlocal construction_count
+        construction_count += 1
+        entered.set()
+        assert release.wait(timeout=2)
+        return FakeFastEmbedModel()
+
+    provider = FastEmbedEmbeddingProvider(
+        cache_path=Path("synthetic-cache"), model_factory=blocking_factory
+    )
+    cancelled_waiter = asyncio.create_task(provider.embed(["cancelled"]), name="cancelled")
+    assert await asyncio.to_thread(entered.wait, 2)
+
+    cancelled_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_waiter
+
+    surviving_waiter = asyncio.create_task(provider.embed(["surviving"]), name="surviving")
+    await asyncio.sleep(0.05)
+    release.set()
+    vectors = await surviving_waiter
+
+    assert construction_count == 1
+    assert provider.loaded is True
+    assert len(vectors) == 1
+
+
+@pytest.mark.asyncio
 async def test_fastembed_coalesces_one_failing_concurrent_load_wave_then_allows_retry() -> None:
     entered = threading.Event()
     release = threading.Event()
@@ -345,6 +378,28 @@ async def test_openai_provider_sends_standard_request_and_restores_index_order()
     assert vectors[0][0] == 1.0
     assert vectors[1][1] == 1.0
     assert provider.loaded is True
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_preserves_percent_encoded_base_path() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.raw_path == b"/api%2Ftenant/embeddings"
+        return httpx.Response(
+            200,
+            json={"data": [{"index": 0, "embedding": unit_vector(0)}]},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleEmbeddingProvider(
+            base_url="https://embedding.example/api%2Ftenant",
+            api_key="synthetic-key",
+            model="synthetic-model",
+            timeout_seconds=1,
+            client=client,
+        )
+        vectors = await provider.embed(["甲"])
+
+    assert vectors[0][0] == 1.0
 
 
 @pytest.mark.parametrize(
