@@ -1,7 +1,8 @@
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,12 +33,26 @@ class Settings(BaseSettings):
     embedding_base_url: str = ""
     embedding_api_key: SecretStr | None = None
     embedding_timeout_seconds: float = 30.0
+    knowledge_worker_tenant_ids: tuple[UUID, ...] = ()
+    knowledge_worker_poll_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        le=3600,
+        allow_inf_nan=False,
+    )
 
     @field_validator("embedding_dimensions", mode="before")
     @classmethod
     def parse_embedding_dimensions(cls, value: object) -> object:
         if value == "512":
             return 512
+        return value
+
+    @field_validator("knowledge_worker_tenant_ids", mode="before")
+    @classmethod
+    def parse_worker_tenant_ids(cls, value: object) -> object:
+        if isinstance(value, str):
+            return tuple(item.strip() for item in value.split(",") if item.strip())
         return value
 
     def api_key_value(self) -> str:

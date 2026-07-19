@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Callable, Iterable, Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -39,6 +40,7 @@ class FastEmbedEmbeddingProvider:
         self._load_lock = asyncio.Lock()
         self._load_task: asyncio.Task[FastEmbedModel] | None = None
         self._load_waiters = 0
+        self._closed = False
 
     @property
     def model_key(self) -> str:
@@ -53,6 +55,8 @@ class FastEmbedEmbeddingProvider:
         return self._loaded
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        if self._closed:
+            raise EmbeddingProviderUnavailableError
         if not texts:
             return []
         model = await self._ensure_loaded()
@@ -68,10 +72,28 @@ class FastEmbedEmbeddingProvider:
             dimensions=self._dimensions,
         )
 
+    async def close(self) -> None:
+        async with self._load_lock:
+            if self._closed:
+                return
+            self._closed = True
+            task = self._load_task
+            self._load_task = None
+            self._model = None
+            self._loaded = False
+        if task is not None and not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
     async def _ensure_loaded(self) -> FastEmbedModel:
+        if self._closed:
+            raise EmbeddingProviderUnavailableError
         if self._model is not None and self._loaded:
             return self._model
         async with self._load_lock:
+            if self._closed:
+                raise EmbeddingProviderUnavailableError
             if self._model is not None and self._loaded:
                 return self._model
             task = self._load_task
@@ -82,6 +104,8 @@ class FastEmbedEmbeddingProvider:
         try:
             model = await asyncio.shield(task)
             async with self._load_lock:
+                if self._closed:
+                    raise EmbeddingProviderUnavailableError
                 if self._model is None:
                     self._model = model
                     self._loaded = True

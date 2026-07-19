@@ -45,6 +45,7 @@ async def build_embedding_provider(
     *,
     client: httpx.AsyncClient | None = None,
     fastembed_factory: Callable[..., FastEmbedModel] | None = None,
+    probe: bool = True,
 ) -> EmbeddingProvider:
     provider_name = settings.embedding_provider
     if provider_name not in SUPPORTED_EMBEDDING_PROVIDERS:
@@ -79,9 +80,14 @@ async def build_embedding_provider(
             dimensions=settings.embedding_dimensions,
             client=client,
         )
+    if not probe:
+        return provider
     try:
-        probe = await provider.embed(["embedding dimension probe"])
-        if len(probe) != 1 or len(probe[0]) != EMBEDDING_DIMENSIONS:
+        probe_vectors = await provider.embed(["embedding dimension probe"])
+        if (
+            len(probe_vectors) != 1
+            or len(probe_vectors[0]) != EMBEDDING_DIMENSIONS
+        ):
             raise EmbeddingConfigurationError
     except Exception:
         if isinstance(provider, OpenAICompatibleEmbeddingProvider):

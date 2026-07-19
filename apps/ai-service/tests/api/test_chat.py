@@ -13,6 +13,9 @@ from app.main import create_app
 
 
 class ApiStubIndex:
+    def __init__(self, *, degraded: bool = False) -> None:
+        self._degraded = degraded
+
     async def search(
         self,
         tenant_id: UUID,
@@ -39,7 +42,8 @@ class ApiStubIndex:
                     rrf_score=2 / 61,
                 ),
             ),
-            mode="hybrid",
+            mode="bm25" if self._degraded else "hybrid",
+            warnings=("HYBRID_RETRIEVAL_DEGRADED",) if self._degraded else (),
         )
 
 
@@ -54,10 +58,10 @@ class ApiStubWorkOrderClient:
         raise AssertionError("work-order route not expected")
 
 
-def app_dependencies() -> AgentDependencies:
+def app_dependencies(*, degraded: bool = False) -> AgentDependencies:
     offline = OfflineTemplateProvider()
     return AgentDependencies(
-        index=ApiStubIndex(),
+        index=ApiStubIndex(degraded=degraded),
         work_order_client=ApiStubWorkOrderClient(),
         gateway=LLMGateway(
             provider=offline,
@@ -93,7 +97,16 @@ async def test_chat_contract() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert {"answer", "citations", "tool_calls", "latency_ms", "model", "warnings"} <= body.keys()
+    assert {
+        "answer",
+        "citations",
+        "tool_calls",
+        "latency_ms",
+        "model",
+        "retrieval_mode",
+        "warnings",
+    } <= body.keys()
+    assert body["retrieval_mode"] == "hybrid"
 
 
 @pytest.mark.asyncio
@@ -124,8 +137,35 @@ async def test_health_reports_provider_without_secret() -> None:
         response = await client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "provider": "offline"}
+    assert response.json() == {
+        "status": "ok",
+        "provider": "offline",
+        "retrieval": {
+            "configured": False,
+            "model_loaded": False,
+            "last_embedding_success_at": None,
+            "mode": "bm25",
+        },
+    }
     assert "key" not in response.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_chat_surfaces_hybrid_degradation_warning() -> None:
+    app = create_app(
+        dependencies=app_dependencies(degraded=True),
+        tenant_resolver=authenticated_tenant,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/chat",
+            json={"session_id": "demo-001", "message": "返工规则是什么？"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["retrieval_mode"] == "bm25"
+    assert response.json()["warnings"] == ["HYBRID_RETRIEVAL_DEGRADED"]
 
 
 @pytest.mark.asyncio

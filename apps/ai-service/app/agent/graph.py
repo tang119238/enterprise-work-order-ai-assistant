@@ -191,6 +191,7 @@ def build_graph(
                 fallback=model_result.fallback,
                 error_code=model_result.error_code,
             ),
+            retrieval_mode=state.get("retrieval_mode", "none"),
             warnings=state.get("warnings", []),
         )
         return {"response": response}

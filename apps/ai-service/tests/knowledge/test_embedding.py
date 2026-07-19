@@ -346,6 +346,20 @@ async def test_fastembed_empty_batch_is_deliberate_and_does_not_load() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fastembed_close_releases_model_and_rejects_new_inference() -> None:
+    provider = fake_fastembed()
+    await provider.embed(["加载"])
+    assert provider.loaded is True
+
+    await provider.close()
+    await provider.close()
+
+    assert provider.loaded is False
+    with pytest.raises(EmbeddingProviderUnavailableError):
+        await provider.embed(["关闭后拒绝"])
+
+
+@pytest.mark.asyncio
 async def test_openai_provider_sends_standard_request_and_restores_index_order() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url == "https://embedding.example/api/v1/embeddings"
@@ -592,6 +606,30 @@ async def test_registry_selects_exact_local_provider_and_probes_with_settings_ca
     assert calls == [
         {"model_name": FASTEMBED_MODEL_NAME, "cache_dir": str(Path("C:/configured/cache"))}
     ]
+
+
+@pytest.mark.asyncio
+async def test_registry_can_construct_local_provider_without_startup_download() -> None:
+    calls: list[dict[str, object]] = []
+
+    def factory(**kwargs: object) -> FakeFastEmbedModel:
+        calls.append(kwargs)
+        return FakeFastEmbedModel()
+
+    provider = await build_embedding_provider(
+        Settings(
+            embedding_provider="local",
+            embedding_model=FASTEMBED_MODEL_NAME,
+            fastembed_cache_path=Path("C:/configured/cache"),
+            _env_file=None,
+        ),
+        fastembed_factory=factory,
+        probe=False,
+    )
+
+    assert isinstance(provider, FastEmbedEmbeddingProvider)
+    assert provider.loaded is False
+    assert calls == []
 
 
 @pytest.mark.asyncio

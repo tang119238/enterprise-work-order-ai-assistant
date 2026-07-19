@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import Literal, TypedDict
 from uuid import UUID
 
 from app.api.models import ChatResponse, Citation, ToolCallRecord, WorkOrderRecord
@@ -14,7 +14,7 @@ class AgentState(TypedDict, total=False):
     route: str
     started_at: float
     knowledge_hits: list[RetrievalHit]
-    retrieval_mode: str
+    retrieval_mode: Literal["hybrid", "bm25", "vector", "none"]
     work_orders: list[WorkOrderRecord]
     tool_calls: list[ToolCallRecord]
     warnings: list[str]

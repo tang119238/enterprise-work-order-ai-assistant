@@ -53,6 +53,7 @@ class ChatResponse(BaseModel):
     tool_calls: list[ToolCallRecord]
     latency_ms: int
     model: ModelMetadata
+    retrieval_mode: Literal["hybrid", "bm25", "vector", "none"] = "none"
     warnings: list[str]
 
 
