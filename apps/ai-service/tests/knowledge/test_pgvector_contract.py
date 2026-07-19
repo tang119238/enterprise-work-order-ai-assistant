@@ -106,6 +106,7 @@ def test_offline_migration_renders_complete_fail_closed_schema_without_secrets()
     }
     for name, definition in expected_foreign_keys.items():
         assert f"CONSTRAINT {name} {definition}" in rendered
+    assert "DEFERRABLE" not in rendered
     for table in (
         "knowledge_document",
         "knowledge_chunk",

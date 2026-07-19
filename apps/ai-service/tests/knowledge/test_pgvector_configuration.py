@@ -17,6 +17,15 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 PYPROJECT = REPOSITORY_ROOT / "apps" / "ai-service" / "pyproject.toml"
 DOCKERFILE = REPOSITORY_ROOT / "apps" / "ai-service" / "Dockerfile"
 ENV_EXAMPLE = REPOSITORY_ROOT / ".env.example"
+APPLICATION_YML = (
+    REPOSITORY_ROOT
+    / "apps"
+    / "work-order-service"
+    / "src"
+    / "main"
+    / "resources"
+    / "application.yml"
+)
 
 
 def parsed_compose(overrides: dict[str, str] | None = None) -> dict[str, object]:
@@ -182,7 +191,7 @@ def test_compose_uses_internal_pgvector_database_and_preserves_bootstrap() -> No
     assert "ports" not in postgres
     assert postgres["healthcheck"]["test"] == [
         "CMD-SHELL",
-        "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB",
+        "pg_isready -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB",
     ]
     mounts = {(mount["source"], mount["target"]) for mount in postgres["volumes"]}
     assert ("work-order-data", "/var/lib/postgresql/data") in mounts
@@ -229,14 +238,59 @@ def test_compose_runs_short_lived_admin_bootstrap_then_alembic_before_ai() -> No
     compose = parsed_compose()
     services = compose["services"]  # type: ignore[index]
     bootstrap = services["pgvector-bootstrap"]
+    work_order_migration = services["work-order-migrate"]
     migration = services["ai-migrate"]
     runtime = services["ai-service"]
+    work_order_runtime = services["work-order-service"]
     postgres = services["postgres"]
 
     assert bootstrap["restart"] == "no"
     assert bootstrap["command"] == ["python", "-m", "app.pgvector_bootstrap"]
     assert set(bootstrap["environment"]) == {"PGVECTOR_ADMIN_DATABASE_URL"}
     assert bootstrap["depends_on"]["postgres"]["condition"] == "service_healthy"
+
+    assert work_order_migration["image"] == "flyway/flyway:10.20.1"
+    assert work_order_migration["restart"] == "no"
+    assert work_order_migration["command"] == ["migrate"]
+    assert set(work_order_migration["environment"]) == {
+        "FLYWAY_URL",
+        "FLYWAY_USER",
+        "FLYWAY_PASSWORD",
+    }
+    assert work_order_migration["environment"]["FLYWAY_URL"] == (
+        "jdbc:postgresql://postgres:5432/workorders"
+    )
+    assert work_order_migration["environment"]["FLYWAY_USER"] == "flyway_owner"
+    assert work_order_migration["depends_on"]["pgvector-bootstrap"]["condition"] == (
+        "service_completed_successfully"
+    )
+    migration_mounts = [
+        mount
+        for mount in work_order_migration["volumes"]
+        if mount["target"] == "/flyway/sql"
+    ]
+    assert len(migration_mounts) == 1
+    assert migration_mounts[0]["type"] == "bind"
+    assert migration_mounts[0]["read_only"] is True
+    assert Path(migration_mounts[0]["source"]).resolve() == (
+        REPOSITORY_ROOT
+        / "apps"
+        / "work-order-service"
+        / "src"
+        / "main"
+        / "resources"
+        / "db"
+        / "migration"
+    ).resolve()
+
+    assert work_order_runtime["depends_on"]["work-order-migrate"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert set(work_order_runtime["depends_on"]) == {"work-order-migrate"}
+    assert work_order_runtime["environment"]["SPRING_FLYWAY_ENABLED"] == "false"
+    assert work_order_runtime["environment"]["DB_USERNAME"] == "work_order_app"
+    assert "FLYWAY_USER" not in work_order_runtime["environment"]
+    assert "FLYWAY_PASSWORD" not in work_order_runtime["environment"]
 
     assert migration["restart"] == "no"
     assert migration["command"] == [
@@ -249,18 +303,50 @@ def test_compose_runs_short_lived_admin_bootstrap_then_alembic_before_ai() -> No
         "head",
     ]
     assert set(migration["environment"]) == {"AI_MIGRATION_DATABASE_URL"}
-    assert migration["depends_on"]["pgvector-bootstrap"]["condition"] == (
+    assert set(migration["depends_on"]) == {"work-order-migrate"}
+    assert migration["depends_on"]["work-order-migrate"]["condition"] == (
         "service_completed_successfully"
     )
-    assert migration["depends_on"]["work-order-service"]["condition"] == "service_healthy"
     assert runtime["depends_on"]["ai-migrate"]["condition"] == (
         "service_completed_successfully"
     )
+    assert runtime["depends_on"]["work-order-service"]["condition"] == "service_healthy"
+    assert set(runtime["depends_on"]) == {"ai-migrate", "work-order-service"}
 
     assert "PGVECTOR_ADMIN_DATABASE_URL" not in runtime["environment"]
     assert "AI_MIGRATION_DATABASE_URL" not in runtime["environment"]
     assert "PGVECTOR_ADMIN_DATABASE_URL" not in postgres["environment"]
     assert "AI_MIGRATION_DATABASE_URL" not in postgres["environment"]
+
+    elevated_keys = {
+        "PGVECTOR_ADMIN_DATABASE_URL",
+        "AI_MIGRATION_DATABASE_URL",
+        "FLYWAY_USER",
+        "FLYWAY_PASSWORD",
+        "FLYWAY_URL",
+    }
+    assert elevated_keys.isdisjoint(runtime["environment"])
+    assert elevated_keys.isdisjoint(work_order_runtime["environment"])
+
+
+def test_postgres_readiness_rejects_the_temporary_init_socket() -> None:
+    compose = parsed_compose()
+    probe = compose["services"]["postgres"]["healthcheck"]["test"]  # type: ignore[index]
+    command = probe[1]
+
+    assert probe[0] == "CMD-SHELL"
+    assert "pg_isready" in command
+    assert "-h 127.0.0.1" in command
+    assert command != "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"
+
+
+def test_spring_flyway_defaults_remain_enabled_outside_compose() -> None:
+    application = APPLICATION_YML.read_text(encoding="utf-8")
+
+    assert "flyway:" in application
+    assert "enabled: true" in application
+    assert "user: ${FLYWAY_USER:flyway_owner}" in application
+    assert "password: ${FLYWAY_PASSWORD:}" in application
 
 
 def test_runtime_application_does_not_consume_migration_database_url() -> None:

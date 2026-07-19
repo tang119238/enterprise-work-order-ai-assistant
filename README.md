@@ -26,10 +26,12 @@ cd enterprise-work-order-ai-assistant
 docker compose up --build -d
 ```
 
-Compose 会先运行两个短生命周期服务：`pgvector-bootstrap` 使用管理员连接执行
-`CREATE EXTENSION IF NOT EXISTS vector`，随后 `ai-migrate` 使用迁移所有者连接执行
-Alembic。只有两步成功后 `ai-service` 才启动；管理员和迁移连接均不会进入长期运行的 AI
-服务。这个流程对新数据卷和已经初始化的 Compose 数据卷都有效。
+Compose 会先运行三个短生命周期服务：`pgvector-bootstrap` 使用管理员连接执行
+`CREATE EXTENSION IF NOT EXISTS vector`，`work-order-migrate` 使用固定版本 Flyway 执行 Java
+迁移，随后 `ai-migrate` 使用迁移所有者连接执行 Alembic。`work-order-service` 只使用
+`work_order_app` 运行时连接并等待 Java 迁移成功；`ai-service` 等待 Alembic 成功和 Java
+健康检查。管理员和迁移连接均不会进入长期运行的应用服务。这个流程对新数据卷和已经
+初始化的 Compose 数据卷都有效。
 
 外部 PostgreSQL 不会运行 Compose 初始化脚本。部署者必须分别提供经过 URI 百分号编码的
 管理员 URL 和迁移所有者 URL，并按下面顺序执行；命令失败时不会打印连接 URL：

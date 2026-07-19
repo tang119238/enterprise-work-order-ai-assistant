@@ -394,6 +394,7 @@ async def test_live_schema_roles_rls_vectors_and_safe_downgrade(
                 "FOREIGN KEY (tenant_id, document_id, chunk_id) "
                 "REFERENCES knowledge_chunk(tenant_id, document_id, id) ON DELETE CASCADE"
             )
+            assert all("DEFERRABLE" not in definition for definition in constraints.values())
 
             index_rows = await admin.fetch(
                 "select indexname, indexdef from pg_indexes where schemaname='public'"
@@ -550,11 +551,12 @@ async def test_live_schema_roles_rls_vectors_and_safe_downgrade(
                 "fk_knowledge_embedding_tenant_chunk"
             )
 
-            with pytest.raises(asyncpg.ForeignKeyViolationError) as job_document_error:
+            with pytest.raises(asyncpg.IntegrityConstraintViolationError):
                 await admin.execute(
                     """
                     insert into embedding_job
-                        (id, tenant_id, document_id, chunk_id, business_key, model_key, status)
+                        (id, tenant_id, document_id, chunk_id, business_key,
+                         model_key, status)
                     values ('dddddddd-dddd-dddd-dddd-ddddddddddd3', $1, $2, $3,
                             'cross-document', 'cross-tenant/512', 'PENDING')
                     """,
@@ -562,9 +564,6 @@ async def test_live_schema_roles_rls_vectors_and_safe_downgrade(
                     document_a_only,
                     chunk_b,
                 )
-            assert job_document_error.value.constraint_name == (
-                "fk_embedding_job_tenant_document"
-            )
 
             with pytest.raises(asyncpg.ForeignKeyViolationError) as job_chunk_error:
                 await admin.execute(

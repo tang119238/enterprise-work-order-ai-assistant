@@ -12,7 +12,7 @@ services:
       AI_DB_PASSWORD: ${AI_DB_PASSWORD:-ai_app_dev}
       ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD:-analytics_reader_dev}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -27,12 +27,11 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/workorders
       DB_USERNAME: work_order_app
       DB_PASSWORD: ${WORK_ORDER_DB_PASSWORD:-work_order_app_dev}
-      FLYWAY_USER: flyway_owner
-      FLYWAY_PASSWORD: ${FLYWAY_PASSWORD:-flyway_owner_dev}
+      SPRING_FLYWAY_ENABLED: "false"
       JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=70.0
     depends_on:
-      postgres:
-        condition: service_healthy
+      work-order-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/actuator/health"]
       interval: 5s
@@ -54,6 +53,20 @@ services:
         condition: service_healthy
     command: ["python", "-m", "app.pgvector_bootstrap"]
 
+  work-order-migrate:
+    image: flyway/flyway:10.20.1
+    restart: "no"
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/workorders
+      FLYWAY_USER: flyway_owner
+      FLYWAY_PASSWORD: ${FLYWAY_PASSWORD:-flyway_owner_dev}
+    depends_on:
+      pgvector-bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - ./apps/work-order-service/src/main/resources/db/migration:/flyway/sql:ro
+    command: ["migrate"]
+
   ai-migrate:
     build:
       context: .
@@ -62,10 +75,8 @@ services:
     environment:
       AI_MIGRATION_DATABASE_URL: ${AI_MIGRATION_DATABASE_URL:-postgresql+asyncpg://flyway_owner:flyway_owner_dev@postgres:5432/workorders}
     depends_on:
-      pgvector-bootstrap:
+      work-order-migrate:
         condition: service_completed_successfully
-      work-order-service:
-        condition: service_healthy
     command: ["python", "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"]
 
   ai-service:
