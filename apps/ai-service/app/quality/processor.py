@@ -30,6 +30,7 @@ PROMPT_VERSION = "quality-inspection-v1"
 _RESULT_NAMESPACE = UUID("05533578-0377-52bb-a97e-c4c6f2460001")
 _AUDIT_NAMESPACE = UUID("05533578-0377-52bb-a97e-c4c6f2460002")
 _REQUEST_NAMESPACE = UUID("05533578-0377-52bb-a97e-c4c6f2460003")
+_POLICY_CHUNK_NAMESPACE = UUID("05533578-0377-52bb-a97e-c4c6f2460004")
 _MAX_RAW_RESPONSE_BYTES = 8 * 1024
 _APPROVED_SNAPSHOT_FIELDS = (
     "id",
@@ -149,7 +150,7 @@ class QualityProcessor:
         model_output = _validated_output(response.payload, retrieval.hits)
         grounded_output = validate_policy_evidence(
             model_output,
-            retrieved_chunk_ids=(hit.chunk_id for hit in retrieval.hits),
+            retrieved_chunk_ids=(policy_chunk_uuid(hit.chunk_id) for hit in retrieval.hits),
         )
         verdict = aggregate_verdict(rule_findings, grounded_output)
         confidence = (
@@ -173,8 +174,19 @@ class QualityProcessor:
 
 
 def policy_rule_code(chunk_id: UUID | str) -> str:
-    parsed = chunk_id if isinstance(chunk_id, UUID) else UUID(chunk_id)
+    parsed = policy_chunk_uuid(chunk_id)
     return f"POLICY_{parsed.hex.upper()}"
+
+
+def policy_chunk_uuid(chunk_id: UUID | str) -> UUID:
+    if isinstance(chunk_id, UUID):
+        return chunk_id
+    try:
+        return UUID(chunk_id)
+    except ValueError:
+        if not chunk_id.strip():
+            raise ValueError("policy chunk ID must be nonblank") from None
+        return uuid5(_POLICY_CHUNK_NAMESPACE, chunk_id)
 
 
 def _safe_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
@@ -242,7 +254,7 @@ def _structured_request(
     policy_chunks = [
         {
             "rule_code": policy_rule_code(hit.chunk_id),
-            "policy_chunk_id": hit.chunk_id,
+            "policy_chunk_id": str(policy_chunk_uuid(hit.chunk_id)),
             "document_key": hit.document_key,
             "document_version": hit.document_version,
             "title": hit.title,

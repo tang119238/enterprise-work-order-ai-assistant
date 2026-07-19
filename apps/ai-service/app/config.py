@@ -41,6 +41,21 @@ class Settings(BaseSettings):
         le=3600,
         allow_inf_nan=False,
     )
+    quality_worker_tenant_ids: tuple[UUID, ...] = ()
+    quality_worker_poll_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        le=3600,
+        allow_inf_nan=False,
+    )
+    quality_callback_poll_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        le=3600,
+        allow_inf_nan=False,
+    )
+    quality_service_token: SecretStr | None = None
+    quality_service_tokens: dict[UUID, SecretStr] = Field(default_factory=dict)
 
     @field_validator("embedding_dimensions", mode="before")
     @classmethod
@@ -49,7 +64,7 @@ class Settings(BaseSettings):
             return 512
         return value
 
-    @field_validator("knowledge_worker_tenant_ids", mode="before")
+    @field_validator("knowledge_worker_tenant_ids", "quality_worker_tenant_ids", mode="before")
     @classmethod
     def parse_worker_tenant_ids(cls, value: object) -> object:
         if isinstance(value, str):
@@ -61,3 +76,17 @@ class Settings(BaseSettings):
 
     def embedding_api_key_value(self) -> str:
         return self.embedding_api_key.get_secret_value().strip() if self.embedding_api_key else ""
+
+    def quality_service_token_value(self) -> str:
+        return (
+            self.quality_service_token.get_secret_value().strip()
+            if self.quality_service_token
+            else ""
+        )
+
+    def quality_service_token_values(self) -> dict[UUID, str]:
+        return {
+            tenant_id: token.get_secret_value().strip()
+            for tenant_id, token in self.quality_service_tokens.items()
+            if token.get_secret_value().strip()
+        }

@@ -23,6 +23,7 @@ from app.knowledge.worker import (
 from app.llm.gateway import LLMGateway
 from app.llm.offline import OfflineTemplateProvider
 from app.main import create_app
+from app.quality.worker import QualityLifecycle, TenantWorkerLoop
 
 
 class FakeProvider:
@@ -288,11 +289,45 @@ async def test_shutdown_attempts_every_resource_after_one_close_failure() -> Non
     assert events == ["http", "database"]
 
 
+@pytest.mark.asyncio
+async def test_fastapi_lifespan_starts_and_stops_separate_quality_loop() -> None:
+    entered = asyncio.Event()
+
+    class BlockingQualityWorker:
+        async def run_once(self, tenant_id: UUID, limit: int) -> object:
+            assert (tenant_id, limit) == (TENANT_ID, 20)
+            entered.set()
+            await asyncio.Event().wait()
+
+    quality_loop = TenantWorkerLoop(
+        BlockingQualityWorker(),
+        tenant_ids=(TENANT_ID,),
+        task_name="test-quality-worker",
+        poll_interval_seconds=60,
+    )
+    app = create_app(
+        dependencies=app_dependencies(),
+        tenant_resolver=authenticated_tenant,
+        retrieval_lifecycle=RetrievalLifecycle(
+            capability=RetrievalCapability(FakeProvider(), configured=False)
+        ),
+        quality_lifecycle=QualityLifecycle(worker_loops=(quality_loop,)),
+    )
+
+    async with app.router.lifespan_context(app):
+        await asyncio.wait_for(entered.wait(), timeout=0.5)
+        assert quality_loop.running is True
+
+    assert quality_loop.running is False
+
+
 def test_worker_tenant_ids_parse_from_comma_separated_environment_value() -> None:
     settings = Settings(
         knowledge_worker_tenant_ids=(
             "11111111-1111-1111-1111-111111111111,22222222-2222-2222-2222-222222222222"
         ),
+        quality_worker_tenant_ids="11111111-1111-1111-1111-111111111111",
+        quality_service_token="synthetic-service-token",
         _env_file=None,
     )
 
@@ -300,3 +335,21 @@ def test_worker_tenant_ids_parse_from_comma_separated_environment_value() -> Non
         UUID("11111111-1111-1111-1111-111111111111"),
         UUID("22222222-2222-2222-2222-222222222222"),
     )
+    assert settings.quality_worker_tenant_ids == (UUID("11111111-1111-1111-1111-111111111111"),)
+    assert settings.quality_service_token_value() == "synthetic-service-token"
+
+
+def test_quality_service_tokens_are_tenant_keyed_and_secret_wrapped() -> None:
+    settings = Settings(
+        quality_service_tokens={
+            "11111111-1111-1111-1111-111111111111": "tenant-a-token",
+            "22222222-2222-2222-2222-222222222222": "tenant-b-token",
+        },
+        _env_file=None,
+    )
+
+    assert settings.quality_service_token_values() == {
+        UUID("11111111-1111-1111-1111-111111111111"): "tenant-a-token",
+        UUID("22222222-2222-2222-2222-222222222222"): "tenant-b-token",
+    }
+    assert "tenant-a-token" not in repr(settings)

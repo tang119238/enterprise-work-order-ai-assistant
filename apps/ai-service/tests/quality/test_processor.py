@@ -17,7 +17,12 @@ from app.llm.errors import (
     ProviderUnavailableError,
 )
 from app.quality.models import ClaimedQualityJob, QualityResultRecord
-from app.quality.processor import QualityOutputError, QualityProcessor, policy_rule_code
+from app.quality.processor import (
+    QualityOutputError,
+    QualityProcessor,
+    policy_chunk_uuid,
+    policy_rule_code,
+)
 
 TENANT = UUID("11111111-1111-1111-1111-111111111111")
 WORK_ORDER = UUID("22222222-2222-2222-2222-222222222222")
@@ -312,3 +317,11 @@ async def test_audit_response_is_utf8_safely_truncated_to_eight_kibibytes() -> N
     assert raw is not None
     assert len(raw.encode("utf-8")) <= 8192
     assert len(result.model_call.response_summary["response_hash"]) == 64
+
+
+def test_checked_in_policy_chunk_ids_receive_stable_uuid_aliases() -> None:
+    first = policy_chunk_uuid("completion-policy#evidence")
+
+    assert first == policy_chunk_uuid("completion-policy#evidence")
+    assert first != policy_chunk_uuid("completion-policy#sla")
+    assert policy_rule_code("completion-policy#evidence") == f"POLICY_{first.hex.upper()}"
