@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-small-zh-v1.5"
     embedding_dimensions: Literal[512] = 512
     fastembed_cache_path: Path = Path("/models")
+    embedding_base_url: str = ""
+    embedding_api_key: SecretStr | None = None
+    embedding_timeout_seconds: float = 30.0
 
     @field_validator("embedding_dimensions", mode="before")
     @classmethod
@@ -39,3 +42,10 @@ class Settings(BaseSettings):
 
     def api_key_value(self) -> str:
         return self.llm_api_key.get_secret_value().strip() if self.llm_api_key else ""
+
+    def embedding_api_key_value(self) -> str:
+        return (
+            self.embedding_api_key.get_secret_value().strip()
+            if self.embedding_api_key
+            else ""
+        )

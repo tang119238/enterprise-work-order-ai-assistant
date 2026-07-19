@@ -97,6 +97,9 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}
       EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-512}
       FASTEMBED_CACHE_PATH: /models
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_TIMEOUT_SECONDS: ${EMBEDDING_TIMEOUT_SECONDS:-30}
       KNOWLEDGE_PATH: /app/knowledge/policies
     volumes:
       - fastembed-cache:/models
