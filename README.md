@@ -26,6 +26,25 @@ cd enterprise-work-order-ai-assistant
 docker compose up --build -d
 ```
 
+Compose 会先运行两个短生命周期服务：`pgvector-bootstrap` 使用管理员连接执行
+`CREATE EXTENSION IF NOT EXISTS vector`，随后 `ai-migrate` 使用迁移所有者连接执行
+Alembic。只有两步成功后 `ai-service` 才启动；管理员和迁移连接均不会进入长期运行的 AI
+服务。这个流程对新数据卷和已经初始化的 Compose 数据卷都有效。
+
+外部 PostgreSQL 不会运行 Compose 初始化脚本。部署者必须分别提供经过 URI 百分号编码的
+管理员 URL 和迁移所有者 URL，并按下面顺序执行；命令失败时不会打印连接 URL：
+
+```bash
+cd apps/ai-service
+PGVECTOR_ADMIN_DATABASE_URL='postgresql+asyncpg://postgres:encoded-password@db.example.invalid:5432/workorders' python -m app.pgvector_bootstrap
+AI_MIGRATION_DATABASE_URL='postgresql+asyncpg://flyway_owner:encoded-password@db.example.invalid:5432/workorders' python -m alembic -c alembic.ini upgrade head
+```
+
+如果管理员预检失败，请确认目标是 PostgreSQL 16 + pgvector 镜像/安装包，并让数据库管理员
+先执行 `CREATE EXTENSION IF NOT EXISTS vector`。不要把
+`PGVECTOR_ADMIN_DATABASE_URL` 或 `AI_MIGRATION_DATABASE_URL` 配置给长期运行的
+`ai-service`。
+
 检查服务：
 
 ```bash

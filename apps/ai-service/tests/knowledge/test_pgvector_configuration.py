@@ -2,6 +2,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from uuid import uuid4
@@ -145,6 +146,25 @@ def test_migration_settings_are_separate_and_required(
         MigrationSettings(_env_file=None)
 
 
+def test_pgvector_admin_settings_are_isolated_and_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.pgvector_bootstrap import PgvectorBootstrapSettings
+
+    admin_url = "postgresql+asyncpg://postgres:admin-test@postgres:5432/workorders"
+    monkeypatch.setenv("PGVECTOR_ADMIN_DATABASE_URL", admin_url)
+
+    runtime_settings = Settings(_env_file=None)
+    bootstrap_settings = PgvectorBootstrapSettings(_env_file=None)
+
+    assert not hasattr(runtime_settings, "pgvector_admin_database_url")
+    assert bootstrap_settings.pgvector_admin_database_url == admin_url
+
+    monkeypatch.delenv("PGVECTOR_ADMIN_DATABASE_URL")
+    with pytest.raises(ValidationError, match="PGVECTOR_ADMIN_DATABASE_URL"):
+        PgvectorBootstrapSettings(_env_file=None)
+
+
 def test_environment_rejects_non_512_embedding_dimension(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -194,13 +214,53 @@ def test_compose_accepts_percent_encoded_runtime_url_without_raw_password_interp
     assert "AI_DB_USERNAME" not in environment
     assert "AI_DB_PASSWORD" not in environment
     assert "AI_MIGRATION_DATABASE_URL" not in environment
-    assert all(
-        "AI_MIGRATION_DATABASE_URL" not in service.get("environment", {})
-        for service in compose["services"].values()
-    )
+    migration_consumers = {
+        name
+        for name, service in compose["services"].items()
+        if "AI_MIGRATION_DATABASE_URL" in service.get("environment", {})
+    }
+    assert migration_consumers == {"ai-migrate"}
     assert compose["services"]["work-order-service"]["environment"]["DB_USERNAME"] == (
         "work_order_app"
     )
+
+
+def test_compose_runs_short_lived_admin_bootstrap_then_alembic_before_ai() -> None:
+    compose = parsed_compose()
+    services = compose["services"]  # type: ignore[index]
+    bootstrap = services["pgvector-bootstrap"]
+    migration = services["ai-migrate"]
+    runtime = services["ai-service"]
+    postgres = services["postgres"]
+
+    assert bootstrap["restart"] == "no"
+    assert bootstrap["command"] == ["python", "-m", "app.pgvector_bootstrap"]
+    assert set(bootstrap["environment"]) == {"PGVECTOR_ADMIN_DATABASE_URL"}
+    assert bootstrap["depends_on"]["postgres"]["condition"] == "service_healthy"
+
+    assert migration["restart"] == "no"
+    assert migration["command"] == [
+        "python",
+        "-m",
+        "alembic",
+        "-c",
+        "alembic.ini",
+        "upgrade",
+        "head",
+    ]
+    assert set(migration["environment"]) == {"AI_MIGRATION_DATABASE_URL"}
+    assert migration["depends_on"]["pgvector-bootstrap"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert migration["depends_on"]["work-order-service"]["condition"] == "service_healthy"
+    assert runtime["depends_on"]["ai-migrate"]["condition"] == (
+        "service_completed_successfully"
+    )
+
+    assert "PGVECTOR_ADMIN_DATABASE_URL" not in runtime["environment"]
+    assert "AI_MIGRATION_DATABASE_URL" not in runtime["environment"]
+    assert "PGVECTOR_ADMIN_DATABASE_URL" not in postgres["environment"]
+    assert "AI_MIGRATION_DATABASE_URL" not in postgres["environment"]
 
 
 def test_runtime_application_does_not_consume_migration_database_url() -> None:
@@ -236,10 +296,12 @@ def test_env_example_documents_synthetic_persistence_and_embedding_settings() ->
     environment = example_environment()
     runtime_url = make_url(environment["AI_DATABASE_URL"])
     migration_url = make_url(environment["AI_MIGRATION_DATABASE_URL"])
+    admin_url = make_url(environment["PGVECTOR_ADMIN_DATABASE_URL"])
     example_text = ENV_EXAMPLE.read_text(encoding="utf-8").lower()
 
     assert (runtime_url.username, runtime_url.host) == ("ai_app", "postgres")
     assert (migration_url.username, migration_url.host) == ("flyway_owner", "postgres")
+    assert (admin_url.username, admin_url.host) == ("postgres", "postgres")
     assert "percent-encode" in example_text
     assert "no host database port" in example_text
     assert "db.example.invalid" in example_text
@@ -315,11 +377,33 @@ def test_dockerfile_installs_project_without_baking_model_weights() -> None:
     assert cache_tokens == ["mkdir", "-p", "/models"]
     assert chown_tokens == ["chown", "app:app", "/models"]
     assert all("/models" not in copy_source for copy_source in copy_sources)
+    assert "apps/ai-service/alembic.ini ./alembic.ini" in copy_sources
+    assert "apps/ai-service/alembic ./alembic" in copy_sources
     assert "snapshot_download" not in dockerfile
     assert "huggingface-cli" not in dockerfile
     assert "fastembed.textembedding" not in dockerfile
     assert "wget " not in dockerfile
     assert "curl " not in dockerfile
+
+
+def test_pgvector_bootstrap_failure_is_actionable_and_secret_safe() -> None:
+    marker = "bootstrap-secret-never-print"
+    environment = os.environ.copy()
+    environment["PGVECTOR_ADMIN_DATABASE_URL"] = f"not-a-database-url-{marker}"
+    result = subprocess.run(
+        [sys.executable, "-m", "app.pgvector_bootstrap"],
+        cwd=REPOSITORY_ROOT / "apps" / "ai-service",
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert marker not in output
+    assert "CREATE EXTENSION IF NOT EXISTS vector" in output
+    assert "PGVECTOR_ADMIN_DATABASE_URL" in output
 
 
 @pytest.mark.skipif(

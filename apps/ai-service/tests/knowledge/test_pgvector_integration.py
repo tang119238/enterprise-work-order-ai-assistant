@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -64,18 +65,39 @@ async def _apply_phase_one(migration_url: str) -> None:
         await connection.close()
 
 
+async def _drop_vector_extension(admin_url: str) -> None:
+    connection = await asyncpg.connect(admin_url.replace("+asyncpg", ""))
+    try:
+        await connection.execute("drop extension vector")
+    finally:
+        await connection.close()
+
+
 def _run_alembic(migration_url: str, *arguments: str) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["AI_MIGRATION_DATABASE_URL"] = migration_url
     return subprocess.run(
         [
-            str(REPOSITORY_ROOT / ".venv" / "Scripts" / "python.exe"),
+            sys.executable,
             "-m",
             "alembic",
             "-c",
             "alembic.ini",
             *arguments,
         ],
+        cwd=AI_SERVICE_ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _run_bootstrap(admin_url: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment["PGVECTOR_ADMIN_DATABASE_URL"] = admin_url
+    return subprocess.run(
+        [sys.executable, "-m", "app.pgvector_bootstrap"],
         cwd=AI_SERVICE_ROOT,
         env=environment,
         check=False,
@@ -104,6 +126,9 @@ def database_urls() -> Iterator[dict[str, str]]:
         admin_url = container.get_connection_url(driver="asyncpg")
         migration_url = _role_url(admin_url, "flyway_owner", "flyway-owner-test")
         runtime_url = _role_url(admin_url, "ai_app", "ai-app-test")
+        asyncio.run(_drop_vector_extension(admin_url))
+        bootstrap = _run_bootstrap(admin_url)
+        assert bootstrap.returncode == 0, bootstrap.stdout + bootstrap.stderr
         asyncio.run(_apply_phase_one(migration_url))
         first = _run_alembic(migration_url, "upgrade", "head")
         assert first.returncode == 0, first.stdout + first.stderr
@@ -153,12 +178,9 @@ async def test_live_schema_roles_rls_vectors_and_safe_downgrade(
     runtime_url = database_urls["runtime"]
     database = Database(Settings(ai_database_url=runtime_url, _env_file=None))
 
-    document_a = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1")
-    document_b = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1")
-    chunk_a = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2")
-    chunk_b = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2")
-    job_a = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3")
-    job_b = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3")
+    document_a = document_b = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1")
+    chunk_a = chunk_b = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2")
+    job_a = job_b = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3")
 
     try:
         for tenant_id, document_id, chunk_id, job_id in (
@@ -265,9 +287,11 @@ async def test_live_schema_roles_rls_vectors_and_safe_downgrade(
         for tenant_id, expected_chunk in ((TENANT_A, chunk_a), (TENANT_B, chunk_b)):
             async with database.session(tenant_id) as session:
                 visible = (
-                    await session.execute(text("select id from knowledge_chunk order by id"))
-                ).scalars().all()
-                assert visible == [expected_chunk]
+                    await session.execute(
+                        text("select tenant_id, id from knowledge_chunk order by id")
+                    )
+                ).one()
+                assert visible == (tenant_id, expected_chunk)
 
         async with database.session(TENANT_A) as session:
             assert (
@@ -287,6 +311,11 @@ async def test_live_schema_roles_rls_vectors_and_safe_downgrade(
                     {"job_id": job_a},
                 )
             ).scalar_one() == job_a
+        async with database.session(TENANT_B) as session:
+            assert await session.scalar(
+                text("select count(*) from embedding_job where id = :job_id"),
+                {"job_id": job_b},
+            ) == 1
 
         migration_engine = create_async_engine(migration_url)
         try:
@@ -320,11 +349,11 @@ async def test_live_schema_roles_rls_vectors_and_safe_downgrade(
                 where c.relname = 'knowledge_embedding' and a.attname = 'dimensions'
                 """
             ) == "smallint"
-            constraints = "\n".join(
-                row["definition"]
+            constraints = {
+                row["conname"]: row["definition"]
                 for row in await admin.fetch(
                     """
-                    select pg_get_constraintdef(oid) as definition
+                    select conname, pg_get_constraintdef(oid) as definition
                     from pg_constraint
                     where conrelid in (
                         'knowledge_document'::regclass, 'knowledge_chunk'::regclass,
@@ -333,12 +362,38 @@ async def test_live_schema_roles_rls_vectors_and_safe_downgrade(
                     order by conname
                     """
                 )
+            }
+            assert constraints["ck_knowledge_embedding_dimensions"] == (
+                "CHECK ((dimensions = 512))"
             )
-            assert "CHECK ((dimensions = 512))" in constraints
-            assert "FOREIGN KEY (tenant_id, document_id)" in constraints
-            assert "FOREIGN KEY (tenant_id, chunk_id)" in constraints
-            assert "UNIQUE (tenant_id, document_key, version)" in constraints
-            assert "PRIMARY KEY (tenant_id, chunk_id, model_key)" in constraints
+            assert constraints["pk_knowledge_document"] == "PRIMARY KEY (tenant_id, id)"
+            assert constraints["pk_knowledge_chunk"] == "PRIMARY KEY (tenant_id, id)"
+            assert constraints["pk_knowledge_embedding"] == (
+                "PRIMARY KEY (tenant_id, chunk_id, model_key)"
+            )
+            assert constraints["pk_embedding_job"] == "PRIMARY KEY (tenant_id, id)"
+            assert constraints["uq_knowledge_document_tenant_key_version"] == (
+                "UNIQUE (tenant_id, document_key, version)"
+            )
+            assert constraints["fk_knowledge_document_tenant"] == (
+                "FOREIGN KEY (tenant_id) REFERENCES tenant(id)"
+            )
+            assert constraints["fk_knowledge_chunk_tenant_document"] == (
+                "FOREIGN KEY (tenant_id, document_id) "
+                "REFERENCES knowledge_document(tenant_id, id) ON DELETE CASCADE"
+            )
+            assert constraints["fk_knowledge_embedding_tenant_chunk"] == (
+                "FOREIGN KEY (tenant_id, chunk_id) "
+                "REFERENCES knowledge_chunk(tenant_id, id) ON DELETE CASCADE"
+            )
+            assert constraints["fk_embedding_job_tenant_document"] == (
+                "FOREIGN KEY (tenant_id, document_id) "
+                "REFERENCES knowledge_document(tenant_id, id) ON DELETE CASCADE"
+            )
+            assert constraints["fk_embedding_job_tenant_document_chunk"] == (
+                "FOREIGN KEY (tenant_id, document_id, chunk_id) "
+                "REFERENCES knowledge_chunk(tenant_id, document_id, id) ON DELETE CASCADE"
+            )
 
             index_rows = await admin.fetch(
                 "select indexname, indexdef from pg_indexes where schemaname='public'"
@@ -407,13 +462,14 @@ async def test_live_schema_roles_rls_vectors_and_safe_downgrade(
             roles = await admin.fetch(
                 """
                 select rolname, rolsuper, rolbypassrls
-                from pg_roles where rolname in ('ai_app', 'flyway_owner')
+                from pg_roles where rolname in ('ai_app', 'flyway_owner', 'work_order_app')
                 order by rolname
                 """
             )
             assert [dict(role) for role in roles] == [
                 {"rolname": "ai_app", "rolsuper": False, "rolbypassrls": False},
                 {"rolname": "flyway_owner", "rolsuper": False, "rolbypassrls": False},
+                {"rolname": "work_order_app", "rolsuper": False, "rolbypassrls": False},
             ]
             extension_owner = await admin.fetchval(
                 """
@@ -434,20 +490,97 @@ async def test_live_schema_roles_rls_vectors_and_safe_downgrade(
             )
             assert [row["rolname"] for row in owners] == ["flyway_owner"]
 
-            with pytest.raises(asyncpg.ForeignKeyViolationError):
+            document_a_only = UUID("cccccccc-cccc-cccc-cccc-ccccccccccc1")
+            chunk_a_only = UUID("cccccccc-cccc-cccc-cccc-ccccccccccc2")
+            await admin.execute(
+                """
+                insert into knowledge_document
+                    (id, tenant_id, document_key, title, source_type, source_uri,
+                     content_hash, version, status)
+                values ($1, $2, 'tenant-a-only', 'Synthetic A only', 'MARKDOWN',
+                        'synthetic://tenant-a-only', $3, 1, 'ACTIVE')
+                """,
+                document_a_only,
+                TENANT_A,
+                "c" * 64,
+            )
+            await admin.execute(
+                """
+                insert into knowledge_chunk
+                    (id, tenant_id, document_id, chunk_key, section, content,
+                     content_hash, token_count, ordinal, status)
+                values ($1, $2, $3, 'tenant-a-only', 'Synthetic', 'Synthetic A only.',
+                        $4, 3, 0, 'ACTIVE')
+                """,
+                chunk_a_only,
+                TENANT_A,
+                document_a_only,
+                "d" * 64,
+            )
+
+            with pytest.raises(asyncpg.ForeignKeyViolationError) as chunk_error:
                 await admin.execute(
                     """
                     insert into knowledge_chunk
                         (id, tenant_id, document_id, chunk_key, section, content,
                          content_hash, token_count, ordinal, status)
                     values
-                        ('cccccccc-cccc-cccc-cccc-ccccccccccc2', $1, $2, 'cross-tenant',
+                        ('dddddddd-dddd-dddd-dddd-ddddddddddd2', $1, $2, 'cross-tenant',
                          'Synthetic', 'Synthetic only.', $3, 2, 1, 'ACTIVE')
                     """,
                     TENANT_B,
-                    document_a,
+                    document_a_only,
                     "c" * 64,
                 )
+            assert chunk_error.value.constraint_name == "fk_knowledge_chunk_tenant_document"
+
+            with pytest.raises(asyncpg.ForeignKeyViolationError) as embedding_error:
+                await admin.execute(
+                    """
+                    insert into knowledge_embedding
+                        (tenant_id, chunk_id, model_key, dimensions, embedding, content_hash)
+                    values ($1, $2, 'cross-tenant/512', 512, $3::vector(512), $4)
+                    """,
+                    TENANT_B,
+                    chunk_a_only,
+                    _vector(512),
+                    "d" * 64,
+                )
+            assert embedding_error.value.constraint_name == (
+                "fk_knowledge_embedding_tenant_chunk"
+            )
+
+            with pytest.raises(asyncpg.ForeignKeyViolationError) as job_document_error:
+                await admin.execute(
+                    """
+                    insert into embedding_job
+                        (id, tenant_id, document_id, chunk_id, business_key, model_key, status)
+                    values ('dddddddd-dddd-dddd-dddd-ddddddddddd3', $1, $2, $3,
+                            'cross-document', 'cross-tenant/512', 'PENDING')
+                    """,
+                    TENANT_B,
+                    document_a_only,
+                    chunk_b,
+                )
+            assert job_document_error.value.constraint_name == (
+                "fk_embedding_job_tenant_document"
+            )
+
+            with pytest.raises(asyncpg.ForeignKeyViolationError) as job_chunk_error:
+                await admin.execute(
+                    """
+                    insert into embedding_job
+                        (id, tenant_id, document_id, chunk_id, business_key, model_key, status)
+                    values ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee3', $1, $2, $3,
+                            'cross-chunk', 'cross-tenant/512', 'PENDING')
+                    """,
+                    TENANT_B,
+                    document_b,
+                    chunk_a_only,
+                )
+            assert job_chunk_error.value.constraint_name == (
+                "fk_embedding_job_tenant_document_chunk"
+            )
         finally:
             await admin.close()
     finally:

@@ -86,8 +86,7 @@ def upgrade() -> None:
             server_default=sa.text("'PENDING'"),
         ),
         *_audit_columns(),
-        sa.PrimaryKeyConstraint("id", name="pk_knowledge_document"),
-        sa.UniqueConstraint("tenant_id", "id", name="uq_knowledge_document_tenant_id"),
+        sa.PrimaryKeyConstraint("tenant_id", "id", name="pk_knowledge_document"),
         sa.UniqueConstraint(
             "tenant_id",
             "document_key",
@@ -134,8 +133,7 @@ def upgrade() -> None:
             server_default=sa.text("'PENDING'"),
         ),
         *_audit_columns(),
-        sa.PrimaryKeyConstraint("id", name="pk_knowledge_chunk"),
-        sa.UniqueConstraint("tenant_id", "id", name="uq_knowledge_chunk_tenant_id"),
+        sa.PrimaryKeyConstraint("tenant_id", "id", name="pk_knowledge_chunk"),
         sa.UniqueConstraint(
             "tenant_id",
             "document_id",
@@ -244,8 +242,7 @@ def upgrade() -> None:
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
         *_audit_columns(),
-        sa.PrimaryKeyConstraint("id", name="pk_embedding_job"),
-        sa.UniqueConstraint("tenant_id", "id", name="uq_embedding_job_tenant_id"),
+        sa.PrimaryKeyConstraint("tenant_id", "id", name="pk_embedding_job"),
         sa.UniqueConstraint(
             "tenant_id",
             "business_key",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 from uuid import UUID
 
@@ -20,6 +21,7 @@ REVISION = (
 )
 ROLE_BOOTSTRAP = REPOSITORY_ROOT / "infra" / "postgres" / "init" / "001_roles.sql"
 VECTOR_BOOTSTRAP = REPOSITORY_ROOT / "infra" / "postgres" / "init" / "000_pgvector.sql"
+README = REPOSITORY_ROOT / "README.md"
 
 
 def test_alembic_and_admin_extension_bootstrap_assets_exist() -> None:
@@ -49,7 +51,7 @@ def test_offline_migration_renders_complete_fail_closed_schema_without_secrets()
     )
     result = subprocess.run(
         [
-            str(REPOSITORY_ROOT / ".venv" / "Scripts" / "python.exe"),
+            sys.executable,
             "-m",
             "alembic",
             "-c",
@@ -81,6 +83,29 @@ def test_offline_migration_renders_complete_fail_closed_schema_without_secrets()
         "knowledge_embedding",
         "embedding_job",
     }
+    assert rendered.count("PRIMARY KEY (tenant_id, id)") == 3
+    assert "UNIQUE (tenant_id, id)" not in rendered
+    expected_foreign_keys = {
+        "fk_knowledge_document_tenant": "FOREIGN KEY(tenant_id) REFERENCES tenant (id)",
+        "fk_knowledge_chunk_tenant_document": (
+            "FOREIGN KEY(tenant_id, document_id) "
+            "REFERENCES knowledge_document (tenant_id, id) ON DELETE CASCADE"
+        ),
+        "fk_knowledge_embedding_tenant_chunk": (
+            "FOREIGN KEY(tenant_id, chunk_id) "
+            "REFERENCES knowledge_chunk (tenant_id, id) ON DELETE CASCADE"
+        ),
+        "fk_embedding_job_tenant_document": (
+            "FOREIGN KEY(tenant_id, document_id) "
+            "REFERENCES knowledge_document (tenant_id, id) ON DELETE CASCADE"
+        ),
+        "fk_embedding_job_tenant_document_chunk": (
+            "FOREIGN KEY(tenant_id, document_id, chunk_id) "
+            "REFERENCES knowledge_chunk (tenant_id, document_id, id) ON DELETE CASCADE"
+        ),
+    }
+    for name, definition in expected_foreign_keys.items():
+        assert f"CONSTRAINT {name} {definition}" in rendered
     for table in (
         "knowledge_document",
         "knowledge_chunk",
@@ -101,6 +126,31 @@ def test_offline_migration_renders_complete_fail_closed_schema_without_secrets()
         line for line in rendered.splitlines() if "work_order" in line.lower()
     )
     assert "DROP EXTENSION" not in rendered.upper()
+
+
+def test_migration_subprocesses_use_the_active_python_interpreter_portably() -> None:
+    migration_tests = (
+        Path(__file__),
+        Path(__file__).with_name("test_pgvector_integration.py"),
+    )
+    windows_venv_fragment = ".venv/" + '" / "' + "Scripts"
+    python_exe_fragment = "Scripts" + '" / "' + "python.exe"
+
+    assert Path(sys.executable).is_file()
+    for test_file in migration_tests:
+        source = test_file.read_text(encoding="utf-8").replace("\\", "/")
+        assert windows_venv_fragment not in source
+        assert python_exe_fragment not in source
+
+
+def test_external_database_bootstrap_and_migration_commands_are_actionable() -> None:
+    readme = README.read_text(encoding="utf-8")
+
+    assert "PGVECTOR_ADMIN_DATABASE_URL" in readme
+    assert "python -m app.pgvector_bootstrap" in readme
+    assert "AI_MIGRATION_DATABASE_URL" in readme
+    assert "python -m alembic -c alembic.ini upgrade head" in readme
+    assert "CREATE EXTENSION IF NOT EXISTS vector" in readme
 
 
 @pytest.mark.asyncio

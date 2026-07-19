@@ -42,6 +42,32 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
 
+  pgvector-bootstrap:
+    build:
+      context: .
+      dockerfile: apps/ai-service/Dockerfile
+    restart: "no"
+    environment:
+      PGVECTOR_ADMIN_DATABASE_URL: ${PGVECTOR_ADMIN_DATABASE_URL:-postgresql+asyncpg://postgres:postgres_dev@postgres:5432/workorders}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "-m", "app.pgvector_bootstrap"]
+
+  ai-migrate:
+    build:
+      context: .
+      dockerfile: apps/ai-service/Dockerfile
+    restart: "no"
+    environment:
+      AI_MIGRATION_DATABASE_URL: ${AI_MIGRATION_DATABASE_URL:-postgresql+asyncpg://flyway_owner:flyway_owner_dev@postgres:5432/workorders}
+    depends_on:
+      pgvector-bootstrap:
+        condition: service_completed_successfully
+      work-order-service:
+        condition: service_healthy
+    command: ["python", "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"]
+
   ai-service:
     build:
       context: .
@@ -64,6 +90,8 @@ services:
     volumes:
       - fastembed-cache:/models
     depends_on:
+      ai-migrate:
+        condition: service_completed_successfully
       work-order-service:
         condition: service_healthy
     healthcheck:

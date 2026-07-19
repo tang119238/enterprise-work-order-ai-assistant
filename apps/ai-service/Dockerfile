@@ -13,6 +13,8 @@ RUN python -m pip install --upgrade pip \
     && mkdir -p /models \
     && chown app:app /models
 COPY apps/ai-service/app ./app
+COPY apps/ai-service/alembic.ini ./alembic.ini
+COPY apps/ai-service/alembic ./alembic
 COPY knowledge ./knowledge
 
 USER app
