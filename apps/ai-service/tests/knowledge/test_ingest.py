@@ -244,9 +244,7 @@ async def test_worker_claim_and_succeed_use_claimed_tenant_context() -> None:
     vector = [1.0] + [0.0] * 511
     assert await worker.succeed(job.id, vector)
 
-    assert repository.claim_calls == [
-        (TENANT_ID, "deterministic-shake256-v1", 10, NOW)
-    ]
+    assert repository.claim_calls == [(TENANT_ID, "deterministic-shake256-v1", 10, NOW)]
     assert repository.successes == [(TENANT_ID, job.id, "a" * 64, vector, NOW)]
 
 
@@ -329,6 +327,4 @@ async def test_worker_nonretryable_embedding_error_marks_job_failed() -> None:
     assert result.retried == 0
     assert result.failed == 1
     assert repository.retries == []
-    assert repository.failures == [
-        (TENANT_ID, job.id, "EMBEDDING_VECTOR_INVALID", NOW)
-    ]
+    assert repository.failures == [(TENANT_ID, job.id, "EMBEDDING_VECTOR_INVALID", NOW)]

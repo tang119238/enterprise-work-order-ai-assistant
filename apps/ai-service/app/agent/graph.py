@@ -89,9 +89,7 @@ def build_graph(
         tool_calls = list(state.get("tool_calls", []))
         if work_order_no and (state["route"] == "combined" or "返工" in state["message"]):
             name = "get_rework_chain"
-            arguments: dict[str, str | int | float | bool | None] = {
-                "work_order_no": work_order_no
-            }
+            arguments: dict[str, str | int | float | bool | None] = {"work_order_no": work_order_no}
         elif work_order_no:
             name = "get_work_order"
             arguments = {"work_order_no": work_order_no}
@@ -102,9 +100,9 @@ def build_graph(
             if name == "get_rework_chain":
                 if work_order_no is None:
                     raise RuntimeError("work-order number routing invariant failed")
-                records: list[WorkOrderRecord] = (
-                    await dependencies.work_order_client.get_rework_chain(work_order_no)
-                )
+                records: list[
+                    WorkOrderRecord
+                ] = await dependencies.work_order_client.get_rework_chain(work_order_no)
             elif name == "get_work_order":
                 if work_order_no is None:
                     raise RuntimeError("work-order number routing invariant failed")

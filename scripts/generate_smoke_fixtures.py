@@ -180,7 +180,7 @@ def _provision_sql(
 BEGIN;
 SET LOCAL app.tenant_id = '{TENANT_A}';
 INSERT INTO user_identity (id, issuer, subject, display_name, status)
-VALUES ({values['dispatcher_user_id']}::uuid, {values['issuer']}, {values['dispatcher']},
+VALUES ({values["dispatcher_user_id"]}::uuid, {values["issuer"]}, {values["dispatcher"]},
         'Synthetic Smoke Dispatcher', 'ACTIVE')
 ON CONFLICT (issuer, subject) DO UPDATE
 SET display_name = EXCLUDED.display_name, status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP;
@@ -191,13 +191,13 @@ CROSS JOIN (VALUES
     ('{uuid.uuid4()}'::uuid, 'DISPATCHER'),
     ('{uuid.uuid4()}'::uuid, 'AI_SERVICE')
 ) AS gen(id, role)
-WHERE identity.issuer = {values['issuer']} AND identity.subject = {values['dispatcher']}
+WHERE identity.issuer = {values["issuer"]} AND identity.subject = {values["dispatcher"]}
 ON CONFLICT (tenant_id, user_identity_id, role) DO UPDATE
 SET status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP;
 INSERT INTO project_scope (id, tenant_id, user_identity_id, project_id, status)
 SELECT '{uuid.uuid4()}'::uuid, '{TENANT_A}'::uuid, identity.id, '{PROJECT_A}'::uuid, 'ACTIVE'
 FROM user_identity identity
-WHERE identity.issuer = {values['issuer']} AND identity.subject = {values['dispatcher']}
+WHERE identity.issuer = {values["issuer"]} AND identity.subject = {values["dispatcher"]}
 ON CONFLICT (tenant_id, user_identity_id, project_id) DO UPDATE
 SET status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP;
 COMMIT;
@@ -205,20 +205,20 @@ COMMIT;
 BEGIN;
 SET LOCAL app.tenant_id = '{TENANT_B}';
 INSERT INTO user_identity (id, issuer, subject, display_name, status)
-VALUES ({values['tenant_b_user_id']}::uuid, {values['issuer']}, {values['tenant_b']},
+VALUES ({values["tenant_b_user_id"]}::uuid, {values["issuer"]}, {values["tenant_b"]},
         'Synthetic Smoke Tenant B Dispatcher', 'ACTIVE')
 ON CONFLICT (issuer, subject) DO UPDATE
 SET display_name = EXCLUDED.display_name, status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP;
 INSERT INTO tenant_membership (id, tenant_id, user_identity_id, role, status)
 SELECT '{uuid.uuid4()}'::uuid, '{TENANT_B}'::uuid, identity.id, 'DISPATCHER', 'ACTIVE'
 FROM user_identity identity
-WHERE identity.issuer = {values['issuer']} AND identity.subject = {values['tenant_b']}
+WHERE identity.issuer = {values["issuer"]} AND identity.subject = {values["tenant_b"]}
 ON CONFLICT (tenant_id, user_identity_id, role) DO UPDATE
 SET status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP;
 INSERT INTO project_scope (id, tenant_id, user_identity_id, project_id, status)
 SELECT '{uuid.uuid4()}'::uuid, '{TENANT_B}'::uuid, identity.id, '{PROJECT_B}'::uuid, 'ACTIVE'
 FROM user_identity identity
-WHERE identity.issuer = {values['issuer']} AND identity.subject = {values['tenant_b']}
+WHERE identity.issuer = {values["issuer"]} AND identity.subject = {values["tenant_b"]}
 ON CONFLICT (tenant_id, user_identity_id, project_id) DO UPDATE
 SET status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP;
 COMMIT;
@@ -242,9 +242,7 @@ def main() -> int:
         audience=args.audience,
         lifetime_seconds=args.lifetime_seconds,
         public_key_env_path=public_env,
-        runtime_db_password=os.getenv(
-            "WORK_ORDER_DB_PASSWORD", "work_order_app_dev"
-        ),
+        runtime_db_password=os.getenv("WORK_ORDER_DB_PASSWORD", "work_order_app_dev"),
     )
     print(f"generated smoke env: {paths.environment}")
     print(f"generated provisioning SQL: {paths.provision_sql}")

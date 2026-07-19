@@ -144,7 +144,9 @@ def request_json(
     try:
         parsed = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise AssertionError(f"Expected JSON object from {url}, got HTTP {status}") from error
+        raise AssertionError(
+            f"Expected JSON object from {url}, got HTTP {status}"
+        ) from error
     if not isinstance(parsed, dict):
         raise AssertionError(f"Expected JSON object from {url}, got HTTP {status}")
     return JsonHttpResponse(status, parsed, raw)
@@ -172,6 +174,42 @@ def wait_until_ready(
     raise TimeoutError(f"Service did not become ready: {url}; last error: {last_error}")
 
 
+def wait_until_knowledge_ready(
+    config: SmokeConfig,
+    *,
+    session_id: str,
+    headers: Mapping[str, str],
+    request: Request = request_json,
+) -> dict[str, object]:
+    deadline = time.monotonic() + config.wait_seconds
+    last_response: JsonHttpResponse | None = None
+    while time.monotonic() < deadline:
+        last_response = request(
+            f"{config.ai_base_url}/chat",
+            method="POST",
+            payload={
+                "session_id": session_id,
+                "message": "返工链路规则是什么？",
+            },
+            headers=headers,
+            timeout_seconds=config.request_timeout_seconds,
+        )
+        warnings = last_response.body.get("warnings")
+        if (
+            last_response.status == 200
+            and last_response.body.get("retrieval_mode") == "hybrid"
+            and "rework-policy" in _document_ids(last_response.body)
+            and (
+                not isinstance(warnings, list)
+                or "HYBRID_RETRIEVAL_DEGRADED" not in warnings
+            )
+        ):
+            return last_response.body
+        time.sleep(1.0)
+    detail = last_response.body if last_response is not None else None
+    raise TimeoutError(f"Hybrid knowledge did not become ready: {detail}")
+
+
 def count_command_rows(
     config: SmokeConfig,
     work_order_no: str,
@@ -192,7 +230,9 @@ def count_command_rows(
             env=process_env,
         )
     except FileNotFoundError as error:
-        raise RuntimeError("Docker Compose is required for command row assertions") from error
+        raise RuntimeError(
+            "Docker Compose is required for command row assertions"
+        ) from error
     except subprocess.TimeoutExpired as error:
         raise RuntimeError("Timed out querying command audit rows") from error
     if completed.returncode != 0:
@@ -312,6 +352,21 @@ def run_smoke_tests(
     tenant_b = _bearer(config.tenant_b_token)
     ai = _bearer(config.ai_token)
 
+    unauthenticated_ai = _expect(
+        request,
+        f"{config.ai_base_url}/chat",
+        401,
+        config.request_timeout_seconds,
+        method="POST",
+        payload={
+            "session_id": f"smoke-unauthenticated-{run}",
+            "message": "返工链路规则是什么？",
+        },
+    ).body
+    detail = unauthenticated_ai.get("detail")
+    assert isinstance(detail, Mapping)
+    assert detail.get("code") == "AUTHENTICATED_TENANT_REQUIRED"
+
     unauthenticated = _expect(
         request,
         f"{config.work_order_base_url}/api/work-orders/{TENANT_A_READ_ORDER}",
@@ -347,17 +402,12 @@ def run_smoke_tests(
     ).body
     assert tenant_a_order.get("work_order_no") == TENANT_A_READ_ORDER
 
-    knowledge = _expect(
-        request,
-        f"{config.ai_base_url}/chat",
-        200,
-        config.request_timeout_seconds,
-        method="POST",
-        payload={
-            "session_id": f"smoke-knowledge-{run}",
-            "message": "返工链路规则是什么？",
-        },
-    ).body
+    knowledge = wait_until_knowledge_ready(
+        config,
+        session_id=f"smoke-knowledge-{run}",
+        headers=dispatcher,
+        request=request,
+    )
     assert _tool_names(knowledge) == set()
     assert "rework-policy" in _document_ids(knowledge)
 
@@ -457,7 +507,9 @@ def run_smoke_tests(
     assert update_proposal.get("expected_version") == 0
     assert _nested(update_proposal, "before_snapshot", "version") == 0
     assert _nested(update_proposal, "after_snapshot", "version") == 1
-    assert _nested(update_proposal, "after_snapshot", "title") == f"Smoke update {suffix}"
+    assert (
+        _nested(update_proposal, "after_snapshot", "title") == f"Smoke update {suffix}"
+    )
     update_proposal_id = _required_text(update_proposal, "id")
 
     ai_denied = _expect(
@@ -760,9 +812,7 @@ def _verify_signature(token: str, public_key_path: str, label: str) -> None:
             raise RuntimeError(f"{label} public key must be RSA")
         header, claims, signature = token.split(".")
         padded = signature + "=" * (-len(signature) % 4)
-        signature_bytes = base64.b64decode(
-            padded, altchars=b"-_", validate=True
-        )
+        signature_bytes = base64.b64decode(padded, altchars=b"-_", validate=True)
         public_key.verify(
             signature_bytes,
             f"{header}.{claims}".encode("ascii"),

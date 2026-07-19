@@ -94,10 +94,7 @@ class EmbeddingWorkerLoop:
         poll_interval_seconds: float = 5.0,
         batch_limit: int = _MAX_BATCH_LIMIT,
     ) -> None:
-        if (
-            isinstance(batch_limit, bool)
-            or not 1 <= batch_limit <= _MAX_BATCH_LIMIT
-        ):
+        if isinstance(batch_limit, bool) or not 1 <= batch_limit <= _MAX_BATCH_LIMIT:
             raise ValueError("batch_limit must be between 1 and 20")
         if (
             isinstance(poll_interval_seconds, bool)

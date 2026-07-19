@@ -229,9 +229,7 @@ async def test_fastembed_load_is_concurrency_safe() -> None:
         construction_count += 1
         return model
 
-    provider = FastEmbedEmbeddingProvider(
-        cache_path=Path("synthetic-cache"), model_factory=factory
-    )
+    provider = FastEmbedEmbeddingProvider(cache_path=Path("synthetic-cache"), model_factory=factory)
 
     results = await asyncio.gather(
         provider.embed(["甲"]),
@@ -717,9 +715,7 @@ async def test_registry_closes_owned_openai_client_when_probe_fails(
             clients.append(self)
 
         async def post(self, *_: object, **__: object) -> httpx.Response:
-            return httpx.Response(
-                200, json={"data": [{"index": 0, "embedding": [1.0] * 384}]}
-            )
+            return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0] * 384}]})
 
         async def aclose(self) -> None:
             self.is_closed = True
@@ -746,9 +742,7 @@ async def test_registry_closes_owned_openai_client_when_probe_fails(
     "settings",
     [
         Settings(embedding_provider="unknown", _env_file=None),
-        Settings(
-            embedding_provider="local", embedding_model="wrong-model", _env_file=None
-        ),
+        Settings(embedding_provider="local", embedding_model="wrong-model", _env_file=None),
         Settings(
             embedding_provider="openai_compatible",
             embedding_model="synthetic-model",

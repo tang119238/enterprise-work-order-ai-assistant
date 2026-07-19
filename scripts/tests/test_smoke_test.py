@@ -25,7 +25,9 @@ CREATE_PROPOSAL_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 UPDATE_PROPOSAL_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 
 
-def test_command_smoke_sequence_uses_strict_decisions_and_proves_replay_is_stable() -> None:
+def test_command_smoke_sequence_uses_strict_decisions_and_proves_replay_is_stable() -> (
+    None
+):
     state = {"created": False, "version": 0, "events": 0, "outbox": 0}
     calls: list[tuple[str, str, Mapping[str, object] | None, Mapping[str, str]]] = []
     count_calls: list[tuple[str, str, str]] = []
@@ -62,6 +64,17 @@ def test_command_smoke_sequence_uses_strict_decisions_and_proves_replay_is_stabl
                 },
             )
         if url.endswith("/chat"):
+            if token is None:
+                return response(
+                    401,
+                    {
+                        "detail": {
+                            "code": "AUTHENTICATED_TENANT_REQUIRED",
+                            "message": "Authenticated tenant context is required",
+                        }
+                    },
+                )
+            assert token == "Bearer dispatcher-token"
             assert payload == {
                 "session_id": "smoke-knowledge-a1b2c3d4e5f6",
                 "message": "返工链路规则是什么？",
@@ -72,10 +85,17 @@ def test_command_smoke_sequence_uses_strict_decisions_and_proves_replay_is_stabl
                     "answer": "Synthetic knowledge answer",
                     "citations": [{"document_id": "rework-policy"}],
                     "tool_calls": [],
+                    "retrieval_mode": "hybrid",
+                    "warnings": [],
                 },
             )
-        if url.endswith(f"/{smoke_test.TENANT_B_READ_ORDER}") and token == "Bearer tenant-b-token":
-            return response(200, {"work_order_no": smoke_test.TENANT_B_READ_ORDER, "version": 0})
+        if (
+            url.endswith(f"/{smoke_test.TENANT_B_READ_ORDER}")
+            and token == "Bearer tenant-b-token"
+        ):
+            return response(
+                200, {"work_order_no": smoke_test.TENANT_B_READ_ORDER, "version": 0}
+            )
         if (
             url.endswith(f"/{smoke_test.TENANT_B_READ_ORDER}")
             and token == "Bearer dispatcher-token"
@@ -103,9 +123,9 @@ def test_command_smoke_sequence_uses_strict_decisions_and_proves_replay_is_stabl
                             "version": 0,
                         },
                         "expected_version": 0,
-                        "expires_at": (
-                            datetime.now(UTC) + timedelta(minutes=15)
-                        ).replace(tzinfo=None).isoformat(),
+                        "expires_at": (datetime.now(UTC) + timedelta(minutes=15))
+                        .replace(tzinfo=None)
+                        .isoformat(),
                     },
                 )
             assert payload == {
@@ -121,10 +141,10 @@ def test_command_smoke_sequence_uses_strict_decisions_and_proves_replay_is_stabl
                     "risk_level": "LOW",
                     "status": "PENDING_CONFIRMATION",
                     "before_snapshot": {"version": 0},
-                        "after_snapshot": {
-                            "version": 1,
-                            "title": "Smoke update A1B2C3D4E5F6",
-                        },
+                    "after_snapshot": {
+                        "version": 1,
+                        "title": "Smoke update A1B2C3D4E5F6",
+                    },
                     "expected_version": 0,
                     "expires_at": "2099-01-01T00:00:00",
                 },
@@ -143,7 +163,10 @@ def test_command_smoke_sequence_uses_strict_decisions_and_proves_replay_is_stabl
                     "version": 0,
                 },
             )
-        if url.endswith(f"/{UPDATE_PROPOSAL_ID}/confirm") and token == "Bearer ai-token":
+        if (
+            url.endswith(f"/{UPDATE_PROPOSAL_ID}/confirm")
+            and token == "Bearer ai-token"
+        ):
             assert payload == {"decision": "CONFIRM"}
             return response(403, {"code": "ACTION_NOT_PERMITTED"})
         if url.endswith(f"/{UPDATE_PROPOSAL_ID}/confirm"):
@@ -168,7 +191,9 @@ def test_command_smoke_sequence_uses_strict_decisions_and_proves_replay_is_stabl
                     "version": state["version"],
                 },
             )
-        raise AssertionError(f"Unexpected request: {method} {url} {payload} {actual_headers}")
+        raise AssertionError(
+            f"Unexpected request: {method} {url} {payload} {actual_headers}"
+        )
 
     def count_rows(
         _config: smoke_test.SmokeConfig,
@@ -220,7 +245,9 @@ def test_command_smoke_sequence_uses_strict_decisions_and_proves_replay_is_stabl
     ]
     assert confirm_calls[0][3]["Idempotency-Key"].startswith("smoke-create-")
     assert confirm_calls[1][3]["Idempotency-Key"].startswith("smoke-ai-denied-")
-    assert confirm_calls[2][3]["Idempotency-Key"] == confirm_calls[3][3]["Idempotency-Key"]
+    assert (
+        confirm_calls[2][3]["Idempotency-Key"] == confirm_calls[3][3]["Idempotency-Key"]
+    )
     assert all(
         work_order == "SMOKE-A1B2C3D4E5F6" and work_order_id == WORK_ORDER_ID
         for work_order, _proposal_id, work_order_id in count_calls
@@ -298,7 +325,9 @@ def test_database_count_command_uses_runtime_role_rls_and_explicit_filters(
     assert all("synthetic-runtime-password" not in argument for argument in command)
     assert process_env["PGPASSWORD"] == "synthetic-runtime-password"
     assert "flyway_owner" not in command
-    assert sql.index("BEGIN;") < sql.index("SET LOCAL app.tenant_id") < sql.index("SELECT")
+    assert (
+        sql.index("BEGIN;") < sql.index("SET LOCAL app.tenant_id") < sql.index("SELECT")
+    )
     assert "11111111-1111-1111-1111-111111111111" in sql
     assert "SMOKE-A1B2C3D4E5F6" in sql
     assert "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" in sql
@@ -424,7 +453,9 @@ def test_ai_multi_role_token_must_use_the_proven_dispatcher_subject() -> None:
         smoke_test._validate_smoke_tokens(config)
 
 
-def test_token_preflight_verifies_rs256_signature_and_strict_claims(tmp_path: Path) -> None:
+def test_token_preflight_verifies_rs256_signature_and_strict_claims(
+    tmp_path: Path,
+) -> None:
     paths = generate_smoke_fixtures.generate_fixtures(
         tmp_path,
         now=datetime.now(UTC),
@@ -480,7 +511,9 @@ def test_token_preflight_verifies_rs256_signature_and_strict_claims(tmp_path: Pa
             )
 
     token_prefix, signature = config.dispatcher_token.rsplit(".", 1)
-    tampered = token_prefix + "." + ("A" if signature[0] != "A" else "B") + signature[1:]
+    tampered = (
+        token_prefix + "." + ("A" if signature[0] != "A" else "B") + signature[1:]
+    )
     with pytest.raises(RuntimeError, match="signature"):
         smoke_test._validate_smoke_tokens(replace(config, dispatcher_token=tampered))
 
@@ -527,9 +560,7 @@ def sign_token(
     private_key = serialization.load_pem_private_key(
         private_key_path.read_bytes(), password=None
     )
-    signature = private_key.sign(
-        signing_input, padding.PKCS1v15(), hashes.SHA256()
-    )
+    signature = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
     return f"{header_segment}.{claims_segment}.{encode_bytes(signature)}"
 
 

@@ -568,9 +568,7 @@ def _business_key(
     chunk_key: str,
     model_key: str,
 ) -> str:
-    source = "\0".join(
-        (str(tenant_id), document_key, str(version), chunk_key, model_key)
-    )
+    source = "\0".join((str(tenant_id), document_key, str(version), chunk_key, model_key))
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 

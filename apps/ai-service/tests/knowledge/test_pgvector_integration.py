@@ -47,8 +47,10 @@ pytestmark = pytest.mark.skipif(
 
 
 def _role_url(admin_url: str, username: str, password: str) -> str:
-    return make_url(admin_url).set(username=username, password=password).render_as_string(
-        hide_password=False
+    return (
+        make_url(admin_url)
+        .set(username=username, password=password)
+        .render_as_string(hide_password=False)
     )
 
 
@@ -312,10 +314,13 @@ async def test_live_schema_roles_rls_vectors_and_safe_downgrade(
                 )
             ).scalar_one() == job_a
         async with database.session(TENANT_B) as session:
-            assert await session.scalar(
-                text("select count(*) from embedding_job where id = :job_id"),
-                {"job_id": job_b},
-            ) == 1
+            assert (
+                await session.scalar(
+                    text("select count(*) from embedding_job where id = :job_id"),
+                    {"job_id": job_b},
+                )
+                == 1
+            )
 
         migration_engine = create_async_engine(migration_url)
         try:
@@ -333,22 +338,28 @@ async def test_live_schema_roles_rls_vectors_and_safe_downgrade(
             assert await admin.fetchval(
                 "select extversion from pg_extension where extname = 'vector'"
             )
-            assert await admin.fetchval(
-                """
+            assert (
+                await admin.fetchval(
+                    """
                 select pg_catalog.format_type(a.atttypid, a.atttypmod)
                 from pg_attribute a
                 join pg_class c on c.oid = a.attrelid
                 where c.relname = 'knowledge_embedding' and a.attname = 'embedding'
                 """
-            ) == "vector(512)"
-            assert await admin.fetchval(
-                """
+                )
+                == "vector(512)"
+            )
+            assert (
+                await admin.fetchval(
+                    """
                 select pg_catalog.format_type(a.atttypid, a.atttypmod)
                 from pg_attribute a
                 join pg_class c on c.oid = a.attrelid
                 where c.relname = 'knowledge_embedding' and a.attname = 'dimensions'
                 """
-            ) == "smallint"
+                )
+                == "smallint"
+            )
             constraints = {
                 row["conname"]: row["definition"]
                 for row in await admin.fetch(
@@ -547,9 +558,7 @@ async def test_live_schema_roles_rls_vectors_and_safe_downgrade(
                     _vector(512),
                     "d" * 64,
                 )
-            assert embedding_error.value.constraint_name == (
-                "fk_knowledge_embedding_tenant_chunk"
-            )
+            assert embedding_error.value.constraint_name == ("fk_knowledge_embedding_tenant_chunk")
 
             with pytest.raises(asyncpg.IntegrityConstraintViolationError):
                 await admin.execute(
@@ -591,8 +600,6 @@ async def test_live_schema_roles_rls_vectors_and_safe_downgrade(
     try:
         assert await admin.fetchval("select to_regclass('public.knowledge_document')") is None
         assert await admin.fetchval("select to_regclass('public.work_order')") == "work_order"
-        assert await admin.fetchval(
-            "select extversion from pg_extension where extname = 'vector'"
-        )
+        assert await admin.fetchval("select extversion from pg_extension where extname = 'vector'")
     finally:
         await admin.close()

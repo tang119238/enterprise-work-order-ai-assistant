@@ -22,10 +22,11 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     llm_fallback_enabled: bool = True
     work_order_base_url: str = "http://localhost:8080"
+    jwt_issuer: str = ""
+    jwt_audience: str = ""
+    jwt_public_key_path: Path | None = None
     knowledge_path: Path = Path("knowledge/policies")
-    ai_database_url: str = (
-        "postgresql+asyncpg://ai_app:ai_app_dev@postgres:5432/workorders"
-    )
+    ai_database_url: str = "postgresql+asyncpg://ai_app:ai_app_dev@postgres:5432/workorders"
     embedding_provider: str = "local"
     embedding_model: str = "BAAI/bge-small-zh-v1.5"
     embedding_dimensions: Literal[512] = 512
@@ -59,8 +60,4 @@ class Settings(BaseSettings):
         return self.llm_api_key.get_secret_value().strip() if self.llm_api_key else ""
 
     def embedding_api_key_value(self) -> str:
-        return (
-            self.embedding_api_key.get_secret_value().strip()
-            if self.embedding_api_key
-            else ""
-        )
+        return self.embedding_api_key.get_secret_value().strip() if self.embedding_api_key else ""

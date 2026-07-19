@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
-import jieba  # type: ignore[import-untyped]
-from rank_bm25 import BM25Plus  # type: ignore[import-untyped]
+import jieba
+from rank_bm25 import BM25Plus
 
 from app.knowledge.models import (
     ActiveKnowledgeChunk,
@@ -112,8 +112,7 @@ class TenantBM25PolicyIndex:
             return []
         active_chunks = await self._source.load_active_chunks(tenant_id)
         signature = tuple(
-            (chunk.chunk_id, chunk.document_version, chunk.content_hash)
-            for chunk in active_chunks
+            (chunk.chunk_id, chunk.document_version, chunk.content_hash) for chunk in active_chunks
         )
         cached = self._cache.get(tenant_id)
         if cached is None or cached.signature != signature:
@@ -150,8 +149,7 @@ class TenantBM25PolicyIndex:
     ) -> _TenantCacheEntry:
         frozen_chunks = tuple(chunks)
         corpus = [
-            tokenize(f"{chunk.title} {chunk.section} {chunk.text}")
-            for chunk in frozen_chunks
+            tokenize(f"{chunk.title} {chunk.section} {chunk.text}") for chunk in frozen_chunks
         ]
         return _TenantCacheEntry(
             signature=signature,

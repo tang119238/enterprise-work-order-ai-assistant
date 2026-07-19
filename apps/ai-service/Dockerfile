@@ -16,6 +16,7 @@ COPY apps/ai-service/app ./app
 COPY apps/ai-service/alembic.ini ./alembic.ini
 COPY apps/ai-service/alembic ./alembic
 COPY knowledge ./knowledge
+COPY apps/ai-service/security/dev-jwt-public-key.pem ./security/dev-jwt-public-key.pem
 
 USER app
 EXPOSE 8000

@@ -92,6 +92,9 @@ services:
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
       LLM_FALLBACK_ENABLED: ${LLM_FALLBACK_ENABLED:-true}
       WORK_ORDER_BASE_URL: http://work-order-service:8080
+      JWT_ISSUER: ${JWT_ISSUER_URI:-http://localhost:9000}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-work-order-service}
+      JWT_PUBLIC_KEY_PATH: /app/security/dev-jwt-public-key.pem
       AI_DATABASE_URL: ${AI_DATABASE_URL:-postgresql+asyncpg://ai_app:ai_app_dev@postgres:5432/workorders}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}

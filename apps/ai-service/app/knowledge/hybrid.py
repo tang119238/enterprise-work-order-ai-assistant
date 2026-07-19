@@ -23,6 +23,7 @@ from app.knowledge.models import (
 HYBRID_RETRIEVAL_DEGRADED = "HYBRID_RETRIEVAL_DEGRADED"
 _RETRIEVAL_CANDIDATE_LIMIT = 50
 _RRF_K = 60
+_MAX_VECTOR_COSINE_DISTANCE = 0.45
 
 
 class BM25Search(Protocol):
@@ -103,9 +104,7 @@ class PostgresVectorPolicyIndex:
             raise ValueError("model_key must be nonblank")
         vector = normalize_embeddings([query_vector], expected_count=1)[0]
         async with self._database.session(tenant_id) as session:
-            await session.execute(
-                text("SELECT set_config('hnsw.ef_search', '100', true)")
-            )
+            await session.execute(text("SELECT set_config('hnsw.ef_search', '100', true)"))
             result = await session.execute(
                 text(
                     """
@@ -130,6 +129,9 @@ class PostgresVectorPolicyIndex:
                       AND e.content_hash = c.content_hash
                       AND d.status = 'ACTIVE'
                       AND c.status = 'ACTIVE'
+                      AND (
+                          e.embedding <=> CAST(:query_vector AS vector)
+                      ) <= :max_distance
                       AND NOT EXISTS (
                           SELECT 1
                           FROM knowledge_document AS newer
@@ -147,6 +149,7 @@ class PostgresVectorPolicyIndex:
                     "tenant_id": tenant_id,
                     "model_key": model_key,
                     "query_vector": json.dumps(vector, separators=(",", ":")),
+                    "max_distance": _MAX_VECTOR_COSINE_DISTANCE,
                     "limit": limit,
                 },
             )
@@ -192,12 +195,8 @@ class HybridPolicyIndex:
         bm25_ok = not isinstance(bm25_outcome, Exception)
         vector_disabled = isinstance(vector_outcome, EmbeddingCapabilityError)
         vector_ok = not isinstance(vector_outcome, Exception)
-        bm25_hits = (
-            cast(list[ActiveKnowledgeChunk], bm25_outcome) if bm25_ok else []
-        )
-        vector_hits = (
-            cast(list[ActiveKnowledgeChunk], vector_outcome) if vector_ok else []
-        )
+        bm25_hits = cast(list[ActiveKnowledgeChunk], bm25_outcome) if bm25_ok else []
+        vector_hits = cast(list[ActiveKnowledgeChunk], vector_outcome) if vector_ok else []
 
         warnings: tuple[str, ...] = ()
         if not bm25_ok or (not vector_ok and not vector_disabled):
@@ -257,16 +256,8 @@ def _rrf_fuse(
             **candidate.model_dump(),
             bm25_rank=bm25_ranks.get(chunk_id),
             vector_rank=vector_ranks.get(chunk_id),
-            rrf_score=(
-                (1 / (_RRF_K + bm25_ranks[chunk_id]))
-                if chunk_id in bm25_ranks
-                else 0.0
-            )
-            + (
-                (1 / (_RRF_K + vector_ranks[chunk_id]))
-                if chunk_id in vector_ranks
-                else 0.0
-            ),
+            rrf_score=((1 / (_RRF_K + bm25_ranks[chunk_id])) if chunk_id in bm25_ranks else 0.0)
+            + ((1 / (_RRF_K + vector_ranks[chunk_id])) if chunk_id in vector_ranks else 0.0),
         )
         for chunk_id, candidate in candidates.items()
     ]

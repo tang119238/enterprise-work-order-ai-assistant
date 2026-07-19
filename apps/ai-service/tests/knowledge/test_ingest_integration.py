@@ -125,24 +125,30 @@ async def test_live_ingestion_is_idempotent_and_only_latest_complete_version_act
                 )
             ).all()
             assert documents == [(1, "INACTIVE"), (2, "ACTIVE")]
-            assert await session.scalar(
-                text(
-                    """
+            assert (
+                await session.scalar(
+                    text(
+                        """
                     SELECT count(*) FROM embedding_job
                     WHERE tenant_id = :tenant_id AND status = 'SUCCEEDED'
                     """
-                ),
-                {"tenant_id": str(TENANT_A)},
-            ) == 2
-            assert await session.scalar(
-                text(
-                    """
+                    ),
+                    {"tenant_id": str(TENANT_A)},
+                )
+                == 2
+            )
+            assert (
+                await session.scalar(
+                    text(
+                        """
                     SELECT count(*) FROM knowledge_embedding
                     WHERE tenant_id = :tenant_id AND model_key = :model_key
                     """
-                ),
-                {"tenant_id": str(TENANT_A), "model_key": provider.model_key},
-            ) == 2
+                    ),
+                    {"tenant_id": str(TENANT_A), "model_key": provider.model_key},
+                )
+                == 2
+            )
 
         async with database.session(TENANT_B) as session:
             assert await session.scalar(text("SELECT count(*) FROM knowledge_document")) == 0

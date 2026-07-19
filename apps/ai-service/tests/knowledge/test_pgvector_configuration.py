@@ -200,9 +200,7 @@ def test_compose_uses_internal_pgvector_database_and_preserves_bootstrap() -> No
 
 def test_compose_accepts_percent_encoded_runtime_url_without_raw_password_interpolation() -> None:
     raw_password = "slash/at@hash#"
-    canonical_url = (
-        "postgresql+asyncpg://ai_app:slash%2Fat%40hash%23@postgres:5432/workorders"
-    )
+    canonical_url = "postgresql+asyncpg://ai_app:slash%2Fat%40hash%23@postgres:5432/workorders"
     compose = parsed_compose(
         {
             "AI_DB_PASSWORD": raw_password,
@@ -265,23 +263,24 @@ def test_compose_runs_short_lived_admin_bootstrap_then_alembic_before_ai() -> No
         "service_completed_successfully"
     )
     migration_mounts = [
-        mount
-        for mount in work_order_migration["volumes"]
-        if mount["target"] == "/flyway/sql"
+        mount for mount in work_order_migration["volumes"] if mount["target"] == "/flyway/sql"
     ]
     assert len(migration_mounts) == 1
     assert migration_mounts[0]["type"] == "bind"
     assert migration_mounts[0]["read_only"] is True
-    assert Path(migration_mounts[0]["source"]).resolve() == (
-        REPOSITORY_ROOT
-        / "apps"
-        / "work-order-service"
-        / "src"
-        / "main"
-        / "resources"
-        / "db"
-        / "migration"
-    ).resolve()
+    assert (
+        Path(migration_mounts[0]["source"]).resolve()
+        == (
+            REPOSITORY_ROOT
+            / "apps"
+            / "work-order-service"
+            / "src"
+            / "main"
+            / "resources"
+            / "db"
+            / "migration"
+        ).resolve()
+    )
 
     assert work_order_runtime["depends_on"]["work-order-migrate"]["condition"] == (
         "service_completed_successfully"
@@ -307,9 +306,7 @@ def test_compose_runs_short_lived_admin_bootstrap_then_alembic_before_ai() -> No
     assert migration["depends_on"]["work-order-migrate"]["condition"] == (
         "service_completed_successfully"
     )
-    assert runtime["depends_on"]["ai-migrate"]["condition"] == (
-        "service_completed_successfully"
-    )
+    assert runtime["depends_on"]["ai-migrate"]["condition"] == ("service_completed_successfully")
     assert runtime["depends_on"]["work-order-service"]["condition"] == "service_healthy"
     assert set(runtime["depends_on"]) == {"ai-migrate", "work-order-service"}
 
@@ -408,9 +405,9 @@ def test_pyproject_declares_persistence_runtime_and_test_dependencies() -> None:
         "alembic>=1.15,<2",
         "pgvector>=0.4,<1",
         "fastembed>=0.7,<1",
+        "cryptography>=45,<47",
     } <= runtime
     assert "testcontainers[postgres]>=4.10,<5" in dev
-    assert "cryptography>=45,<47" in dev
 
 
 def test_dockerfile_installs_project_without_baking_model_weights() -> None:
@@ -431,14 +428,10 @@ def test_dockerfile_installs_project_without_baking_model_weights() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8").lower()
 
     pip_installs = [
-        tokens
-        for _, tokens in tokenized_runs
-        if tokens[:4] == ["python", "-m", "pip", "install"]
+        tokens for _, tokens in tokenized_runs if tokens[:4] == ["python", "-m", "pip", "install"]
     ]
     project_installs = [
-        tokens
-        for tokens in pip_installs
-        if any(token.startswith(".") for token in tokens[4:])
+        tokens for tokens in pip_installs if any(token.startswith(".") for token in tokens[4:])
     ]
     assert project_installs == [["python", "-m", "pip", "install", "."]]
     assert all(".[dev]" not in tokens for tokens in project_installs)

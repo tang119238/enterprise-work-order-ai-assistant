@@ -1,6 +1,6 @@
 # Enterprise Work Order AI Assistant
 
-面向企业工单场景的可审计 RAG + Agent MVP：Spring Boot 提供 JWT 认证、租户/项目隔离的工单查询，以及“建议—人工确认—事实写入”的命令能力；FastAPI、LangGraph 和 BM25 完成意图路由、制度检索、工具调用及有依据的回答。
+面向企业工单场景的可审计 RAG + Agent：Spring Boot 提供 JWT 认证、租户/项目隔离的工单查询，以及“建议—人工确认—事实写入”的命令能力；FastAPI、LangGraph、租户 BM25 与 pgvector 完成意图路由、混合制度检索、工具调用及有依据的回答。
 
 > 仓库中的制度、项目、人员和 50 条工单均为合成数据，不对应任何真实企业、客户或生产系统。
 
@@ -9,7 +9,7 @@
 | 能力 | 实现 | 可验证结果 |
 | --- | --- | --- |
 | 企业后端 | Java 17、Spring Security、MyBatis-Plus、Flyway、PostgreSQL RLS | 租户内查询、权威操作预览、人工确认、幂等写入与审计 Outbox |
-| RAG | Markdown 制度切分、jieba、BM25、原文引用 | 20 个需检索案例 Recall@5 为 100% |
+| RAG | 版本化制度、FastEmbed 512 维、租户 BM25、pgvector HNSW、RRF、原文引用 | 30+ 题分别报告 BM25/Hybrid Recall@5、引用有效率和降级数 |
 | Agent | LangGraph 三路编排、Java 工具调用、调用审计 | 工具准确率 100% |
 | 模型接入 | 离线模板、OpenAI 兼容适配器、方舟 Responses 适配器 | 7 个在线 provider 配置；两类协议适配器通过 MockTransport 契约测试 |
 | 工程化 | Docker Compose、Testcontainers、pytest、CI | Java/Python 可执行测试与 Docker 门控的真实 PostgreSQL 冒烟验收 |
@@ -54,12 +54,12 @@ curl http://127.0.0.1:8080/actuator/health
 curl http://127.0.0.1:8000/health
 ```
 
-默认无需 API Key。启动后可访问：
+默认 LLM 无需 API Key；`/chat` 必须携带可验证的 JWT。启动后可访问：
 
 - AI API 文档：<http://127.0.0.1:8000/docs>
 - Java 健康检查：<http://127.0.0.1:8080/actuator/health>
 
-健康检查无需认证；所有 `/api/**` 与 `/internal/**` 都需要服务端可验证的 JWT。仓库提供的 fixture 生成器会在被忽略的 `.smoke/` 中临时创建 RSA 密钥、最长 15 分钟的合成 Token、幂等授权 SQL 和环境文件；Compose 只挂载公钥，私钥不会进入容器或 Git。完整流程见 [操作建议 API](docs/api/action-proposals.md)。
+健康检查无需认证；`/chat`、所有 `/api/**` 与 `/internal/**` 都需要服务端可验证的 JWT。Python 与 Java 分别校验 RS256 签名、issuer、audience、有效期和租户声明。仓库提供的 fixture 生成器会在被忽略的 `.smoke/` 中临时创建 RSA 密钥、最长 15 分钟的合成 Token、幂等授权 SQL 和环境文件；Compose 只挂载公钥，私钥不会进入容器或 Git。完整流程见 [操作建议 API](docs/api/action-proposals.md)。
 
 停止并删除演示数据卷：
 
@@ -73,6 +73,7 @@ docker compose down --volumes
 
 ```bash
 curl -s http://127.0.0.1:8000/chat \
+  -H "Authorization: Bearer $DISPATCHER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"session_id":"demo-k","message":"再次返工时应该怎样关联根工单？"}'
 ```
@@ -112,7 +113,7 @@ Windows PowerShell 中请使用 `curl.exe`，或直接在 FastAPI `/docs` 页面
 flowchart LR
     U["调用方"] --> A["FastAPI /chat"]
     A --> G["LangGraph 路由与编排"]
-    G --> R["BM25 制度检索"]
+    G --> R["租户 BM25 + pgvector + RRF"]
     G --> T["受认证的工单工具"]
     T --> J["Spring Boot API"]
     J --> X["建议/人工确认/单事务命令"]
@@ -136,7 +137,7 @@ combined   -> call_work_order_tool -> retrieve_knowledge -> compose_answer
 
 工单事实和写入都由 Java 决定；模型或 `AI_SERVICE` 最多创建操作建议，不能确认或拒绝。引用、命令事件和 Outbox 由程序生成，不接受模型自行声明。完整设计见 [架构说明](docs/architecture.md)。
 
-当前 Python `WorkOrderClient` 不签发也不转发服务 JWT；因此本阶段的认证读写验收直接调用 Java API。把 `/chat` 的工单工具重新接到受保护接口前，部署方必须增加明确的 Token 传递/交换，不能恢复匿名 Java 访问。
+FastAPI 已验证调用方 JWT 并只从认证上下文取得检索租户；请求体不能选择租户。当前 Python `WorkOrderClient` 仍不签发或转发服务 JWT，因此本阶段的认证写入验收直接调用 Java API。把 `/chat` 的工单工具接到受保护接口前，仍须增加明确的 Token 传递或服务间交换，不能恢复匿名 Java 访问。
 
 ## `/chat` 响应契约
 
@@ -165,6 +166,7 @@ combined   -> call_work_order_tool -> retrieve_knowledge -> compose_answer
     "fallback": false,
     "error_code": null
   },
+  "retrieval_mode": "hybrid",
   "warnings": []
 }
 ```
@@ -180,23 +182,21 @@ docker compose -f docker-compose.yml build
 docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml up -d
 Get-Content -Raw .smoke/provision.sql | docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d workorders
 .\.venv\Scripts\python.exe scripts/smoke_test.py --env-file .smoke/smoke.env
+.\.venv\Scripts\python.exe eval/run_retrieval_eval.py --base-url http://127.0.0.1:8000
 docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml down
 ```
 
-先构建镜像，再生成默认精确 900 秒的 Token，避免首次下载/构建消耗短期凭据窗口。冒烟脚本会对 Token 头、RS256 签名、声明、UUID、时间窗和最长 15 分钟寿命做 fail-closed 预检，并硬失败于服务不可用或运行时角色无法执行 RLS 计数。它验证未认证请求返回精确稳定的 `401 AUTHENTICATION_REQUIRED`、跨租户 404、认证读取、未确认工单 API 404 且事实表/事件/Outbox 为零、约 15 分钟的权威预览、`AI_SERVICE` 多角色确认仍为 403、人工确认只增加一个版本，以及同 `Idempotency-Key` replay 不重复事件/Outbox；同时保留不需要工单 Token 的 knowledge-only `/chat` 检索检查。每次使用唯一 `SMOKE-<run-id>` 工单，不删除既有数据。
+先构建镜像，再生成默认精确 900 秒的 Token，避免首次下载/构建消耗短期凭据窗口。冒烟脚本会对 Token 头、RS256 签名、声明、UUID、时间窗和最长 15 分钟寿命做 fail-closed 预检，并硬失败于服务不可用或运行时角色无法执行 RLS 计数。它验证 Java 与 AI 匿名请求均为 401、跨租户 404、认证读取、无降级 hybrid 制度引用、未确认工单 API 404 且事实表/事件/Outbox 为零、约 15 分钟的权威预览、`AI_SERVICE` 多角色确认仍为 403、人工确认只增加一个版本，以及同 `Idempotency-Key` replay 不重复事件/Outbox。每次使用唯一 `SMOKE-<run-id>` 工单，不删除既有数据。
 
-原有 30 题离线评测是既有质量基线，不与本阶段认证 smoke 合并执行。当前 `WorkOrderClient` 尚不转发调用方 Token，因此其中的工单/组合 `/chat` 路径不能作为受保护 Java API 的 live 验收；修复方式必须是显式 Token 传递或交换，而不是放开匿名访问。
+新增检索评测集覆盖同义改写、口语表达、关键词缺失和硬负例。评分器在同一数据集上计算磁盘制度的 BM25 基线与认证 live hybrid 结果，并逐字核验当前制度引用；它默认从被忽略的 `.smoke/smoke.env` 读取短期调度员 Token，但不会把 Token 写入报告。
 
-评测集严格包含 10 个制度问答、10 个工单查询和 10 个组合问答。验收门槛与本次结果：
+原 MVP 综合评测仍严格包含 10 个制度问答、10 个工单查询和 10 个组合问答。新增混合检索集为 24 个正例与 6 个硬负例，其独立验收门槛如下：
 
-| 指标 | 门槛 | 本次结果 |
+| 指标 | 门槛 | 输出 |
 | --- | ---: | ---: |
-| 成功请求率 | 100% | 100%（30/30） |
-| Retrieval Recall@5 | ≥ 80% | 100% |
-| 引用有效率 | ≥ 90% | 100% |
-| 工具准确率 | 100% | 100% |
-| 必需事实准确率 | 观察指标 | 100% |
-| 禁用事实准确率 | 观察指标 | 100% |
+| Hybrid Recall@5 | ≥ BM25 且 ≥ 90% | 由 `hybrid_report.json` 实况生成 |
+| 引用有效率 | ≥ 95% | 由 `hybrid_report.json` 实况生成 |
+| 硬负例零引用 | 100% | 由 `hybrid_report.json` 实况生成 |
 
 本地开发检查（使用已安装 Maven，不依赖 wrapper）：
 
@@ -210,7 +210,7 @@ mvn -f apps/work-order-service/pom.xml test
 .\.venv\Scripts\python.exe -m mypy --config-file apps/ai-service/pyproject.toml apps/ai-service/app
 ```
 
-本阶段在 2026-07-18 的当前工作树验证结果：Java 全量 168（145 通过、失败 0、错误 0、跳过 23）；Python 为 AI 服务 43 + scripts 11，共 54 通过；Ruff、Python 编译与双 Compose 文件的 `config --quiet` 通过。23 个 Docker/Testcontainers 门控跳过精确为 `ActionProposalMapperIntegrationTest` 1、`IdempotencyConcurrencyTest` 12、`TenantRlsIntegrationTest` 3、`TenantSchemaIntegrationTest` 5、`WorkOrderPostgresIntegrationTest` 2。Docker 客户端 29.6.1 与 Compose 5.2.0 可用，但 Linux Engine named pipe 不存在，因此 `up`、PostgreSQL RLS 与 live smoke 是 blocked/not run，不声明端到端通过；Compose 配置解析不能替代运行时验收。
+本阶段在 2026-07-20 的当前工作树验证结果：Java 全量 168（145 通过、失败 0、错误 0、跳过 23）；Python 为 AI 服务 199 + scripts 11，共 210 通过，另有 3 个 Docker 门控 Python 测试跳过；Ruff check/format、40 个应用源文件 mypy、Python 编译与双 Compose 文件的 `config --quiet` 通过。离线 30 题检索集的 BM25 正例 Recall@5 为 100%（24/24），硬负例零召回为 100%（6/6）。Docker CLI 可用但 Linux Engine named pipe 不存在，因此镜像构建、PostgreSQL/pgvector、FastEmbed 下载、live smoke 与 live hybrid 评测均未执行，不声明端到端或 hybrid 指标通过；Compose 配置解析不能替代运行时验收。
 
 ## 国内模型平台
 
@@ -225,7 +225,7 @@ mvn -f apps/work-order-service/pom.xml test
 
 ## 技术取舍
 
-- **BM25 先于向量库**：MVP 只有 12 个制度段落，BM25 可离线、可复现、无需额外服务；接口已隔离为 `PolicyIndex`，后续可并行引入 pgvector 和混合召回。
+- **混合召回且可降级**：每租户当前活动制度分别执行 BM25 Top 50 与 512 维 pgvector Top 50，再用固定 RRF 合并；向量不可用时显式返回 BM25 模式和降级 warning。
 - **Java 持有业务事实与写权限**：AI 服务不直连业务表。任何高风险动作先形成服务器权威预览，再由有权的人确认；`AI_SERVICE` 即使同时声明其他角色也不能确认。
 - **确定性事实与生成式解释分离**：状态、时限、负责人和根工单永远不由模型生成，降低幻觉风险。
 - **离线优先**：克隆仓库即可演示；在线模型不可用时可按配置降级，并在 `model.fallback` 和 `error_code` 中显式披露。
@@ -237,7 +237,7 @@ mvn -f apps/work-order-service/pom.xml test
 apps/work-order-service/  Spring Boot 多租户查询与人工确认命令服务
 apps/ai-service/          FastAPI、LangGraph、RAG 与模型网关
 knowledge/policies/       3 份合成制度、12 个可检索段落
-eval/                     30 题评测集与评测器
+eval/                     原 MVP 评测与 30+ 题混合检索评测器
 scripts/                  端到端冒烟脚本
 docs/                     架构、配置和演示说明
 .github/workflows/        无真实密钥的持续集成

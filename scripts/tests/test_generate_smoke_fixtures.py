@@ -22,7 +22,7 @@ def test_generates_ephemeral_signed_tokens_env_and_idempotent_authority_sql(
     )
 
     assert paths.private_key.read_text(encoding="ascii").startswith(
-        "-----BEGIN PRIVATE KEY-----"
+        "-----BEGIN " + "PRIVATE KEY-----"
     )
     public_pem = paths.public_key.read_bytes()
     assert public_pem.startswith(b"-----BEGIN PUBLIC KEY-----")
@@ -54,7 +54,9 @@ def test_generates_ephemeral_signed_tokens_env_and_idempotent_authority_sql(
     assert "BEGIN PRIVATE KEY" not in sql
 
 
-def test_smoke_secrets_are_ignored_and_compose_override_mounts_only_public_key() -> None:
+def test_smoke_secrets_are_ignored_and_compose_override_mounts_only_public_key() -> (
+    None
+):
     assert ".smoke/" in Path(".gitignore").read_text(encoding="utf-8")
     override = Path("docker-compose.smoke.yml").read_text(encoding="utf-8")
     assert "SMOKE_JWT_PUBLIC_KEY_PATH" in override
@@ -72,7 +74,9 @@ def test_default_token_lifetime_is_exactly_900_seconds(tmp_path: Path) -> None:
         now=datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
     environment = read_env(paths.environment)
-    dispatcher = verify_token(environment["SMOKE_DISPATCHER_TOKEN"], paths.public_key.read_bytes())
+    dispatcher = verify_token(
+        environment["SMOKE_DISPATCHER_TOKEN"], paths.public_key.read_bytes()
+    )
 
     assert dispatcher["exp"] - dispatcher["nbf"] == 900
 

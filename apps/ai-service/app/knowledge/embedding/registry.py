@@ -84,10 +84,7 @@ async def build_embedding_provider(
         return provider
     try:
         probe_vectors = await provider.embed(["embedding dimension probe"])
-        if (
-            len(probe_vectors) != 1
-            or len(probe_vectors[0]) != EMBEDDING_DIMENSIONS
-        ):
+        if len(probe_vectors) != 1 or len(probe_vectors[0]) != EMBEDDING_DIMENSIONS:
             raise EmbeddingConfigurationError
     except Exception:
         if isinstance(provider, OpenAICompatibleEmbeddingProvider):

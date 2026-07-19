@@ -391,8 +391,10 @@ async def test_vector_sql_sets_hnsw_and_filters_tenant_model_active_current_chun
     assert "NOT EXISTS" in query_sql
     assert "newer.version > d.version" in query_sql
     assert "e.content_hash = c.content_hash" in query_sql
+    assert "<= :max_distance" in query_sql
     assert "e.embedding <=> CAST(:query_vector AS vector)" in query_sql
     assert "LIMIT :limit" in query_sql
     assert parameters["tenant_id"] == TENANT_A  # type: ignore[index]
     assert parameters["model_key"] == "synthetic-model/512"  # type: ignore[index]
     assert parameters["limit"] == 50  # type: ignore[index]
+    assert parameters["max_distance"] == 0.45  # type: ignore[index]

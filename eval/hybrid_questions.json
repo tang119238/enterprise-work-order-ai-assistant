@@ -1,0 +1,35 @@
+[
+  {"id":"rework-01","query":"修完验收还是不达标，接下来要怎样处理？","kind":"positive","challenge":"synonym","expected_document_ids":["rework-policy"]},
+  {"id":"rework-02","query":"第二次又没弄好，新单到底挂哪一张？","kind":"positive","challenge":"conversational","expected_document_ids":["rework-policy"]},
+  {"id":"rework-03","query":"同一个毛病连续两次没解决，后续记录怎么串起来？","kind":"positive","challenge":"keyword_absent","expected_document_ids":["rework-policy"]},
+  {"id":"rework-04","query":"验收失败能不能直接改掉原来的处理结果？","kind":"positive","challenge":"synonym","expected_document_ids":["rework-policy"]},
+  {"id":"rework-05","query":"师傅返修时还能换个人来做吗？","kind":"positive","challenge":"conversational","expected_document_ids":["rework-policy"]},
+  {"id":"rework-06","query":"重复点提交怎样避免生成两张整改单？","kind":"positive","challenge":"synonym","expected_document_ids":["rework-policy"]},
+  {"id":"rework-07","query":"想看完整的返修过程，页面该列哪些记录？","kind":"positive","challenge":"conversational","expected_document_ids":["rework-policy"]},
+  {"id":"rework-08","query":"返修后的截止时间沿用旧单还是重新算？","kind":"positive","challenge":"synonym","expected_document_ids":["rework-policy"]},
+
+  {"id":"sla-01","query":"会危及人身安全的活最晚多久要处理完？","kind":"positive","challenge":"keyword_absent","expected_document_ids":["sla-policy"]},
+  {"id":"sla-02","query":"核心区域受影响但有临时措施，该定什么等级？","kind":"positive","challenge":"synonym","expected_document_ids":["sla-policy"]},
+  {"id":"sla-03","query":"普通故障是不是一天之内要搞定？","kind":"positive","challenge":"conversational","expected_document_ids":["sla-policy"]},
+  {"id":"sla-04","query":"不影响使用的计划整改应该排多高？","kind":"positive","challenge":"synonym","expected_document_ids":["sla-policy"]},
+  {"id":"sla-05","query":"判断一张单快超时时，看统一时长还是它自己的截止时间？","kind":"positive","challenge":"conversational","expected_document_ids":["sla-policy"]},
+  {"id":"sla-06","query":"预计来不及完成，要等过期以后再上报吗？","kind":"positive","challenge":"keyword_absent","expected_document_ids":["sla-policy"]},
+  {"id":"sla-07","query":"外部条件不具备时暂停，能直接当作关闭吗？","kind":"positive","challenge":"synonym","expected_document_ids":["sla-policy"]},
+  {"id":"sla-08","query":"师傅说做完以后，验收等待时间和处理时间混在一起算吗？","kind":"positive","challenge":"conversational","expected_document_ids":["sla-policy"]},
+
+  {"id":"lifecycle-01","query":"新建问题记录时哪些基本信息一个都不能少？","kind":"positive","challenge":"synonym","expected_document_ids":["work-order-lifecycle"]},
+  {"id":"lifecycle-02","query":"标题只写异常和尽快处理合不合规？","kind":"positive","challenge":"conversational","expected_document_ids":["work-order-lifecycle"]},
+  {"id":"lifecycle-03","query":"没有项目或地点信息能让系统自动找人吗？","kind":"positive","challenge":"keyword_absent","expected_document_ids":["work-order-lifecycle"]},
+  {"id":"lifecycle-04","query":"已经分给师傅但他还没确认，现在算什么阶段？","kind":"positive","challenge":"conversational","expected_document_ids":["work-order-lifecycle"]},
+  {"id":"lifecycle-05","query":"负责人做不了时能私下转给别人吗？","kind":"positive","challenge":"synonym","expected_document_ids":["work-order-lifecycle"]},
+  {"id":"lifecycle-06","query":"处理人提交结果就等于流程彻底结束了吗？","kind":"positive","challenge":"keyword_absent","expected_document_ids":["work-order-lifecycle"]},
+  {"id":"lifecycle-07","query":"取消任务以后还要留下什么信息？","kind":"positive","challenge":"synonym","expected_document_ids":["work-order-lifecycle"]},
+  {"id":"lifecycle-08","query":"助手解释当前状态时能只靠制度文字推测吗？","kind":"positive","challenge":"conversational","expected_document_ids":["work-order-lifecycle"]},
+
+  {"id":"negative-01","query":"今天食堂供应哪些菜？","kind":"hard_negative","challenge":"hard_negative","expected_document_ids":[]},
+  {"id":"negative-02","query":"带薪休假能积攒到下一年度吗？","kind":"hard_negative","challenge":"hard_negative","expected_document_ids":[]},
+  {"id":"negative-03","query":"出差花费走账要准备哪些票据？","kind":"hard_negative","challenge":"hard_negative","expected_document_ids":[]},
+  {"id":"negative-04","query":"室内绿植每周应该浇几次水？","kind":"hard_negative","challenge":"hard_negative","expected_document_ids":[]},
+  {"id":"negative-05","query":"班车早班经过哪些站点？","kind":"hard_negative","challenge":"hard_negative","expected_document_ids":[]},
+  {"id":"negative-06","query":"电脑登录密码忘了怎么重置？","kind":"hard_negative","challenge":"hard_negative","expected_document_ids":[]}
+]

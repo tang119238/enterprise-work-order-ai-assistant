@@ -13,12 +13,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 AI_SERVICE_ROOT = REPOSITORY_ROOT / "apps" / "ai-service"
 ALEMBIC_INI = AI_SERVICE_ROOT / "alembic.ini"
 ALEMBIC_ENV = AI_SERVICE_ROOT / "alembic" / "env.py"
-REVISION = (
-    AI_SERVICE_ROOT
-    / "alembic"
-    / "versions"
-    / "20260718_01_knowledge_pgvector.py"
-)
+REVISION = AI_SERVICE_ROOT / "alembic" / "versions" / "20260718_01_knowledge_pgvector.py"
 ROLE_BOOTSTRAP = REPOSITORY_ROOT / "infra" / "postgres" / "init" / "001_roles.sql"
 VECTOR_BOOTSTRAP = REPOSITORY_ROOT / "infra" / "postgres" / "init" / "000_pgvector.sql"
 README = REPOSITORY_ROOT / "README.md"
@@ -72,9 +67,7 @@ def test_offline_migration_renders_complete_fail_closed_schema_without_secrets()
     assert secret not in rendered
     assert "CREATE EXTENSION IF NOT EXISTS vector" in rendered
     created_tables = {
-        line.split()[2]
-        for line in rendered.splitlines()
-        if line.startswith("CREATE TABLE ")
+        line.split()[2] for line in rendered.splitlines() if line.startswith("CREATE TABLE ")
     }
     assert created_tables == {
         "alembic_version",

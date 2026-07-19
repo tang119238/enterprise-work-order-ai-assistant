@@ -12,6 +12,7 @@ venv/
 .env
 *.log
 eval/report.json
+eval/hybrid_report.json
 secrets/
 .smoke/
 .worktrees/

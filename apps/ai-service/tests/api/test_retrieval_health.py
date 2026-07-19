@@ -291,8 +291,7 @@ async def test_shutdown_attempts_every_resource_after_one_close_failure() -> Non
 def test_worker_tenant_ids_parse_from_comma_separated_environment_value() -> None:
     settings = Settings(
         knowledge_worker_tenant_ids=(
-            "11111111-1111-1111-1111-111111111111,"
-            "22222222-2222-2222-2222-222222222222"
+            "11111111-1111-1111-1111-111111111111,22222222-2222-2222-2222-222222222222"
         ),
         _env_file=None,
     )

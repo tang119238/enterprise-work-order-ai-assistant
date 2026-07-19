@@ -1,7 +1,7 @@
 import asyncio
 import inspect
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Annotated
@@ -9,12 +9,14 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import Response
 
-from app.agent.graph import AgentDependencies, build_graph
+from app.agent.graph import AgentDependencies, PolicyIndex, build_graph
 from app.api.models import ChatRequest, ChatResponse
 from app.config import Settings
 from app.db import Database
-from app.knowledge.bm25 import TenantBM25PolicyIndex
+from app.knowledge.bm25 import StaticTenantBM25PolicyIndex, TenantBM25PolicyIndex
+from app.knowledge.bootstrap import ingest_policy_directory
 from app.knowledge.embedding.registry import (
     DisabledEmbeddingProvider,
     build_embedding_provider,
@@ -24,7 +26,8 @@ from app.knowledge.hybrid import (
     PostgresActiveChunkSource,
     PostgresVectorPolicyIndex,
 )
-from app.knowledge.ingest import EmbeddingWorker
+from app.knowledge.ingest import EmbeddingWorker, KnowledgeIngestor
+from app.knowledge.loader import load_policy_directory
 from app.knowledge.repository import PostgresKnowledgeRepository
 from app.knowledge.worker import (
     EmbeddingWorkerLoop,
@@ -35,6 +38,7 @@ from app.llm.errors import ProviderError
 from app.llm.gateway import LLMGateway
 from app.llm.offline import OfflineTemplateProvider
 from app.llm.registry import build_provider
+from app.security.jwt import JwtAuthenticationError, build_tenant_authenticator
 from app.tools.work_order_client import WorkOrderClient
 
 REQUEST_TIMEOUT_SECONDS = 60.0
@@ -69,6 +73,7 @@ def create_app(
     retrieval_lifecycle: RetrievalLifecycle | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
+    tenant_authenticator = build_tenant_authenticator(settings)
     resolve_authenticated_tenant = tenant_resolver or authenticated_tenant_from_state
     runtime_dependencies = dependencies
     provider_name = (
@@ -95,8 +100,8 @@ def create_app(
         application.state.graph = build_graph(runtime_dependencies)
         application.state.retrieval_lifecycle = active_lifecycle
         application.state.provider_name = provider_name
-        await active_lifecycle.start()
         try:
+            await active_lifecycle.start()
             yield
         finally:
             await active_lifecycle.close()
@@ -119,6 +124,20 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    if tenant_resolver is None:
+
+        @application.middleware("http")
+        async def authenticate_tenant(
+            request: Request,
+            call_next: Callable[[Request], Awaitable[Response]],
+        ) -> Response:
+            if request.url.path == "/chat" and tenant_authenticator is not None:
+                with suppress(JwtAuthenticationError):
+                    request.state.tenant_id = tenant_authenticator.authenticate(
+                        request.headers.get("Authorization")
+                    )
+            return await call_next(request)
 
     def tenant_dependency(request: Request) -> UUID:
         tenant_id = resolve_authenticated_tenant(request)
@@ -197,19 +216,34 @@ async def _build_production_runtime(settings: Settings) -> _ProductionRuntime:
             capability.provider,
             retry_delay=timedelta(minutes=5),
         )
+        worker_tenant_ids = (
+            settings.knowledge_worker_tenant_ids
+            if settings.embedding_provider != "disabled"
+            else ()
+        )
         worker_loop = EmbeddingWorkerLoop(
             embedding_worker,
-            tenant_ids=settings.knowledge_worker_tenant_ids,
+            tenant_ids=worker_tenant_ids,
             poll_interval_seconds=settings.knowledge_worker_poll_seconds,
             batch_limit=20,
         )
         source = PostgresActiveChunkSource(database)
-        dependencies = AgentDependencies(
-            index=HybridPolicyIndex(
+        index: PolicyIndex
+        if settings.embedding_provider == "disabled":
+            index = StaticTenantBM25PolicyIndex(load_policy_directory(settings.knowledge_path))
+        else:
+            await ingest_policy_directory(
+                KnowledgeIngestor(repository, model_key=capability.provider.model_key),
+                tenant_ids=worker_tenant_ids,
+                directory=settings.knowledge_path,
+            )
+            index = HybridPolicyIndex(
                 bm25=TenantBM25PolicyIndex(source),
                 vector=PostgresVectorPolicyIndex(database),
                 embedding_provider=capability.provider,
-            ),
+            )
+        dependencies = AgentDependencies(
+            index=index,
             work_order_client=work_order_client,
             gateway=LLMGateway(
                 provider=provider,
