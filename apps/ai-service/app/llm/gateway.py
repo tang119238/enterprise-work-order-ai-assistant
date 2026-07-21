@@ -1,9 +1,16 @@
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 
-from app.llm.contracts import LLMProvider, LLMRequest, LLMResult
-from app.llm.errors import ProviderError
+from app.llm.contracts import (
+    LLMProvider,
+    LLMRequest,
+    LLMResult,
+    StructuredLLMRequest,
+    StructuredLLMResult,
+)
+from app.llm.errors import ProviderBadResponseError, ProviderError
 
 
 class LLMGateway:
@@ -23,6 +30,39 @@ class LLMGateway:
         self.sleep = sleep
 
     async def generate(self, request: LLMRequest) -> LLMResult:
+        try:
+            return await self._generate_primary(request)
+        except ProviderError as error:
+            if not self.fallback_enabled:
+                raise
+            fallback = await self.fallback_provider.generate(request)
+            return replace(fallback, fallback=True, error_code=error.code)
+
+    async def generate_structured(
+        self,
+        request: StructuredLLMRequest,
+    ) -> StructuredLLMResult:
+        # A template fallback is never a valid quality decision. Preserve the
+        # provider error so the quality worker can apply its retry policy.
+        result = await self._generate_primary(request.as_llm_request())
+        try:
+            payload = json.loads(result.content)
+        except (TypeError, ValueError) as error:
+            raise ProviderBadResponseError from error
+        if not isinstance(payload, dict):
+            raise ProviderBadResponseError
+        return StructuredLLMResult(
+            payload=payload,
+            raw_content=result.content,
+            provider=result.provider,
+            model=result.model,
+            latency_ms=result.latency_ms,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            estimated_cost=result.estimated_cost,
+        )
+
+    async def _generate_primary(self, request: LLMRequest) -> LLMResult:
         last_error: ProviderError | None = None
         for attempt in range(self.max_retries + 1):
             try:
@@ -35,7 +75,4 @@ class LLMGateway:
 
         if last_error is None:
             raise RuntimeError("Provider failed without a standardized error")
-        if not self.fallback_enabled:
-            raise last_error
-        fallback = await self.fallback_provider.generate(request)
-        return replace(fallback, fallback=True, error_code=last_error.code)
+        raise last_error

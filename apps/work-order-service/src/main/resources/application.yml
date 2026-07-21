@@ -3,13 +3,22 @@ spring:
     name: work-order-service
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/workorders}
-    username: ${DB_USERNAME:demo}
-    password: ${DB_PASSWORD:demo}
+    username: ${DB_USERNAME:work_order_app}
+    password: ${DB_PASSWORD:}
   jackson:
     property-naming-strategy: SNAKE_CASE
     default-property-inclusion: non_null
   flyway:
     enabled: true
+    user: ${FLYWAY_USER:flyway_owner}
+    password: ${FLYWAY_PASSWORD:}
+
+security:
+  jwt:
+    issuer-uri: ${JWT_ISSUER_URI:http://localhost:9000}
+    audience: ${JWT_AUDIENCE:work-order-service}
+    jwk-set-uri: ${JWT_JWK_SET_URI:}
+    public-key-location: ${JWT_PUBLIC_KEY_LOCATION:classpath:security/dev-jwt-public-key.pem}
 
 mybatis-plus:
   configuration:
@@ -24,3 +33,11 @@ management:
     health:
       probes:
         enabled: true
+
+analytics:
+  datasource:
+    url: ${ANALYTICS_DB_URL:${spring.datasource.url}}
+    username: ${ANALYTICS_DB_USERNAME:analytics_reader}
+    password: ${ANALYTICS_DB_PASSWORD:}
+    maximum-pool-size: 5
+    connection-timeout: 5000

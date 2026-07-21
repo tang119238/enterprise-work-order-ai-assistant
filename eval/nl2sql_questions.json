@@ -1,0 +1,17 @@
+[
+  {"id": "q01", "question": "各状态的工单数量是多少？", "expected_type": "aggregate"},
+  {"id": "q02", "question": "P0优先级的工单有多少？", "expected_type": "filter_count"},
+  {"id": "q03", "question": "哪个项目的工单最多？", "expected_type": "group_count"},
+  {"id": "q04", "question": "已完成工单的平均处理时长是多少小时？", "expected_type": "aggregate"},
+  {"id": "q05", "question": "当前超期的工单有哪些？", "expected_type": "filter"},
+  {"id": "q06", "question": "最近创建的10个工单", "expected_type": "order_limit"},
+  {"id": "q07", "question": "各优先级的工单数量分布", "expected_type": "group_count"},
+  {"id": "q08", "question": "BUG类型工单的完成率", "expected_type": "filter_aggregate"},
+  {"id": "q09", "question": "质检判定为FAIL的工单有哪些？", "expected_type": "join_filter"},
+  {"id": "q10", "question": "各项目的质检通过率", "expected_type": "join_aggregate"},
+  {"id": "q11", "question": "高严重度发现数量最多的工单", "expected_type": "join_order"},
+  {"id": "q12", "question": "整改案例中状态为CLOSED的有多少？", "expected_type": "filter_count"},
+  {"id": "q13", "question": "各轮次的质检结果分布", "expected_type": "group_count"},
+  {"id": "q14", "question": "本月创建的工单数量", "expected_type": "time_filter"},
+  {"id": "q15", "question": "按负责人统计工单数量", "expected_type": "group_count"}
+]

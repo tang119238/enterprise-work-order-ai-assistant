@@ -27,6 +27,19 @@ def load_policy(path: Path) -> list[PolicyChunk]:
         raise ValueError(f"Policy {path.name} is missing document_id")
 
     document_id = document_id_match.group(1)
+    title, sections = _parse_markdown_sections(content)
+    if not title:
+        raise ValueError(f"Policy {path.name} is missing an H1 title")
+    return _build_policy_chunks(document_id, title, sections)
+
+
+def chunk_policy_markdown(document_id: str, title: str, content: str) -> list[PolicyChunk]:
+    """Apply the established H2/H3 and 500/50 chunk rules to supplied Markdown."""
+    _, sections = _parse_markdown_sections(content)
+    return _build_policy_chunks(document_id, title, sections)
+
+
+def _parse_markdown_sections(content: str) -> tuple[str, list[tuple[str, str]]]:
     title = ""
     current_section = ""
     section_lines: list[str] = []
@@ -55,9 +68,14 @@ def load_policy(path: Path) -> list[PolicyChunk]:
         section_lines = []
 
     flush_section()
-    if not title:
-        raise ValueError(f"Policy {path.name} is missing an H1 title")
+    return title, sections
 
+
+def _build_policy_chunks(
+    document_id: str,
+    title: str,
+    sections: list[tuple[str, str]],
+) -> list[PolicyChunk]:
     chunks: list[PolicyChunk] = []
     for section_index, (section, text) in enumerate(sections):
         for chunk_index, chunk_text in enumerate(_split_text(text)):

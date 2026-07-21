@@ -1,6 +1,6 @@
 # Enterprise Work Order AI Assistant
 
-面向企业工单场景的可审计 RAG + Agent MVP：以 Spring Boot 提供只读工单能力，以 FastAPI、LangGraph 和 BM25 完成意图路由、制度检索、工具调用及有依据的回答，并通过统一网关兼容多个国内大模型平台。
+面向企业工单场景的可审计 RAG + Agent：Spring Boot 提供 JWT 认证、租户/项目隔离的工单查询，以及“建议—人工确认—事实写入”的命令能力；FastAPI、LangGraph、租户 BM25 与 pgvector 完成意图路由、混合制度检索、工具调用及有依据的回答。
 
 > 仓库中的制度、项目、人员和 50 条工单均为合成数据，不对应任何真实企业、客户或生产系统。
 
@@ -8,13 +8,13 @@
 
 | 能力 | 实现 | 可验证结果 |
 | --- | --- | --- |
-| 企业后端 | Java 17、Spring Boot、MyBatis-Plus、Flyway、PostgreSQL | 详情、条件分页、返工链路 3 类只读接口 |
-| RAG | Markdown 制度切分、jieba、BM25、原文引用 | 20 个需检索案例 Recall@5 为 100% |
+| 企业后端 | Java 17、Spring Security、MyBatis-Plus、Flyway、PostgreSQL RLS | 租户内查询、权威操作预览、人工确认、幂等写入与审计 Outbox |
+| RAG | 版本化制度、FastEmbed 512 维、租户 BM25、pgvector HNSW、RRF、原文引用 | 30+ 题分别报告 BM25/Hybrid Recall@5、引用有效率和降级数 |
 | Agent | LangGraph 三路编排、Java 工具调用、调用审计 | 工具准确率 100% |
 | 模型接入 | 离线模板、OpenAI 兼容适配器、方舟 Responses 适配器 | 7 个在线 provider 配置；两类协议适配器通过 MockTransport 契约测试 |
-| 工程化 | Docker Compose、Testcontainers、pytest、CI | 30/30 请求成功，引用有效率 100% |
+| 工程化 | Docker Compose、Testcontainers、pytest、CI | Java/Python 可执行测试与 Docker 门控的真实 PostgreSQL 冒烟验收 |
 
-以上评测结果于 2026-07-18 在默认 `offline` 模式下通过本仓库脚本实测。在线平台只做了无密钥的 HTTP 契约测试，未把 Mock 测试描述为真实模型联调。
+RAG 的 30 题离线评测结果来自 2026-07-18 的既有实测。多租户命令阶段的 Java/Python 测试与 Docker 实测状态分开记录；没有 Docker 时不会把静态测试描述成 PostgreSQL/Compose 实测。在线平台只做无密钥 HTTP 契约测试，未把 Mock 测试描述为真实模型联调。
 
 ## 快速启动
 
@@ -26,6 +26,27 @@ cd enterprise-work-order-ai-assistant
 docker compose up --build -d
 ```
 
+Compose 会先运行三个短生命周期服务：`pgvector-bootstrap` 使用管理员连接执行
+`CREATE EXTENSION IF NOT EXISTS vector`，`work-order-migrate` 使用固定版本 Flyway 执行 Java
+迁移，随后 `ai-migrate` 使用迁移所有者连接执行 Alembic。`work-order-service` 只使用
+`work_order_app` 运行时连接并等待 Java 迁移成功；`ai-service` 等待 Alembic 成功和 Java
+健康检查。管理员和迁移连接均不会进入长期运行的应用服务。这个流程对新数据卷和已经
+初始化的 Compose 数据卷都有效。
+
+外部 PostgreSQL 不会运行 Compose 初始化脚本。部署者必须分别提供经过 URI 百分号编码的
+管理员 URL 和迁移所有者 URL，并按下面顺序执行；命令失败时不会打印连接 URL：
+
+```bash
+cd apps/ai-service
+PGVECTOR_ADMIN_DATABASE_URL='postgresql+asyncpg://postgres:encoded-password@db.example.invalid:5432/workorders' python -m app.pgvector_bootstrap
+AI_MIGRATION_DATABASE_URL='postgresql+asyncpg://flyway_owner:encoded-password@db.example.invalid:5432/workorders' python -m alembic -c alembic.ini upgrade head
+```
+
+如果管理员预检失败，请确认目标是 PostgreSQL 16 + pgvector 镜像/安装包，并让数据库管理员
+先执行 `CREATE EXTENSION IF NOT EXISTS vector`。不要把
+`PGVECTOR_ADMIN_DATABASE_URL` 或 `AI_MIGRATION_DATABASE_URL` 配置给长期运行的
+`ai-service`。
+
 检查服务：
 
 ```bash
@@ -33,10 +54,12 @@ curl http://127.0.0.1:8080/actuator/health
 curl http://127.0.0.1:8000/health
 ```
 
-默认无需 API Key。启动后可访问：
+默认 LLM 无需 API Key；`/chat` 必须携带可验证的 JWT。启动后可访问：
 
 - AI API 文档：<http://127.0.0.1:8000/docs>
 - Java 健康检查：<http://127.0.0.1:8080/actuator/health>
+
+健康检查无需认证；`/chat`、所有 `/api/**` 与 `/internal/**` 都需要服务端可验证的 JWT。Python 与 Java 分别校验 RS256 签名、issuer、audience、有效期和租户声明。仓库提供的 fixture 生成器会在被忽略的 `.smoke/` 中临时创建 RSA 密钥、最长 15 分钟的合成 Token、幂等授权 SQL 和环境文件；Compose 只挂载公钥，私钥不会进入容器或 Git。完整流程见 [操作建议 API](docs/api/action-proposals.md)。
 
 停止并删除演示数据卷：
 
@@ -50,31 +73,37 @@ docker compose down --volumes
 
 ```bash
 curl -s http://127.0.0.1:8000/chat \
+  -H "Authorization: Bearer $DISPATCHER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"session_id":"demo-k","message":"再次返工时应该怎样关联根工单？"}'
 ```
 
 预期：`tool_calls` 为空，`citations` 包含 `rework-policy` 及可在制度文件中逐字定位的 `quote`。
 
-### 2. 工单查询：事实来自 Java 接口
+### 2. 工单查询：事实来自已认证的 Java 接口
 
-```bash
-curl -s http://127.0.0.1:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"session_id":"demo-w","message":"查询 WO-20260718-001 当前状态"}'
+```powershell
+$env:DISPATCHER_TOKEN='<short-lived-synthetic-jwt>'
+curl.exe -s http://127.0.0.1:8080/api/work-orders/WO-20260718-001 `
+  -H "Authorization: Bearer $env:DISPATCHER_TOKEN"
 ```
 
-预期：调用 `get_work_order`，返回状态、优先级、负责人和截止时间；不产生制度引用。
+预期：只在 Token 的 `tenant_id`、`project_ids` 与数据库当前授权求交后仍包含该工单时，返回状态、项目、负责人和 `version`；范围外统一为 `404 WORK_ORDER_NOT_FOUND`。
 
-### 3. 组合问答：返工链路 + 制度解释
+### 3. 高风险写入：先预览，再由人确认
 
-```bash
-curl -s http://127.0.0.1:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"session_id":"demo-c","message":"WO-20260718-008 为什么是返工单，接下来怎么处理？"}'
+`POST /api/action-proposals` 只保存服务器根据当前数据库事实生成的预览，不修改 `work_order`。随后由有权的人调用精确的确认接口：
+
+```http
+POST /api/action-proposals/{proposal-id}/confirm
+Authorization: Bearer <human-jwt>
+Idempotency-Key: synthetic-demo-confirm-001
+Content-Type: application/json
+
+{"decision":"CONFIRM"}
 ```
 
-预期：调用 `get_rework_chain`，回答同时包含根工单 `WO-20260718-007`、返工单 `WO-20260718-008` 和返工制度引用。
+确认端点只接受上面的精确请求体；拒绝端点只接受 `{"decision":"REJECT"}`。字段名、大小写、端点与 decision 不匹配，或增加任意未知字段，都返回 `422 INVALID_COMMAND`。完整 CREATE、CONFIRM、同键 replay 与 REJECT 可复制示例见 [操作建议 API](docs/api/action-proposals.md)。
 
 Windows PowerShell 中请使用 `curl.exe`，或直接在 FastAPI `/docs` 页面执行请求。
 
@@ -84,10 +113,11 @@ Windows PowerShell 中请使用 `curl.exe`，或直接在 FastAPI `/docs` 页面
 flowchart LR
     U["调用方"] --> A["FastAPI /chat"]
     A --> G["LangGraph 路由与编排"]
-    G --> R["BM25 制度检索"]
-    G --> T["只读工单工具"]
+    G --> R["租户 BM25 + pgvector + RRF"]
+    G --> T["受认证的工单工具"]
     T --> J["Spring Boot API"]
-    J --> P[("PostgreSQL")]
+    J --> X["建议/人工确认/单事务命令"]
+    X --> P[("PostgreSQL + RLS")]
     G --> M["统一模型网关"]
     M --> O["offline"]
     M --> C["OpenAI 兼容平台"]
@@ -105,7 +135,9 @@ work_order -> call_work_order_tool -> compose_answer
 combined   -> call_work_order_tool -> retrieve_knowledge -> compose_answer
 ```
 
-工单事实由 Java 返回值确定性格式化；模型只负责解释检索到的制度片段。引用和工具审计记录由程序生成，不接受模型自行声明。完整设计见 [架构说明](docs/architecture.md)。
+工单事实和写入都由 Java 决定；模型或 `AI_SERVICE` 最多创建操作建议，不能确认或拒绝。引用、命令事件和 Outbox 由程序生成，不接受模型自行声明。完整设计见 [架构说明](docs/architecture.md)。
+
+FastAPI 已验证调用方 JWT 并只从认证上下文取得检索租户；请求体不能选择租户。当前 Python `WorkOrderClient` 仍不签发或转发服务 JWT，因此本阶段的认证写入验收直接调用 Java API。把 `/chat` 的工单工具接到受保护接口前，仍须增加明确的 Token 传递或服务间交换，不能恢复匿名 Java 访问。
 
 ## `/chat` 响应契约
 
@@ -134,42 +166,51 @@ combined   -> call_work_order_tool -> retrieve_knowledge -> compose_answer
     "fallback": false,
     "error_code": null
   },
+  "retrieval_mode": "hybrid",
   "warnings": []
 }
 ```
 
 ## 评测与测试
 
-启动 Compose 后运行：
-
-```bash
-python scripts/smoke_test.py
-python eval/run_eval.py --base-url http://localhost:8000 --output eval/report.json
-```
-
-评测集严格包含 10 个制度问答、10 个工单查询和 10 个组合问答。验收门槛与本次结果：
-
-| 指标 | 门槛 | 本次结果 |
-| --- | ---: | ---: |
-| 成功请求率 | 100% | 100%（30/30） |
-| Retrieval Recall@5 | ≥ 80% | 100% |
-| 引用有效率 | ≥ 90% | 100% |
-| 工具准确率 | 100% | 100% |
-| 必需事实准确率 | 观察指标 | 100% |
-| 禁用事实准确率 | 观察指标 | 100% |
-
-本地开发检查：
+需要认证的阶段验收使用一次性合成 fixture：
 
 ```powershell
-$env:JAVA_HOME='C:\Program Files\Zulu\zulu-17'
-cd apps/work-order-service
-.\mvnw.cmd test
+.\.venv\Scripts\python.exe -m pip install -e "apps/ai-service[dev]"
+docker compose -f docker-compose.yml build
+.\.venv\Scripts\python.exe scripts/generate_smoke_fixtures.py --output .smoke
+docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml up -d
+Get-Content -Raw .smoke/provision.sql | docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d workorders
+.\.venv\Scripts\python.exe scripts/smoke_test.py --env-file .smoke/smoke.env
+.\.venv\Scripts\python.exe eval/run_retrieval_eval.py --base-url http://127.0.0.1:8000
+docker compose --env-file .smoke/smoke.env -f docker-compose.yml -f docker-compose.smoke.yml down
+```
 
-cd ../..
+先构建镜像，再生成默认精确 900 秒的 Token，避免首次下载/构建消耗短期凭据窗口。冒烟脚本会对 Token 头、RS256 签名、声明、UUID、时间窗和最长 15 分钟寿命做 fail-closed 预检，并硬失败于服务不可用或运行时角色无法执行 RLS 计数。它验证 Java 与 AI 匿名请求均为 401、跨租户 404、认证读取、无降级 hybrid 制度引用、未确认工单 API 404 且事实表/事件/Outbox 为零、约 15 分钟的权威预览、`AI_SERVICE` 多角色确认仍为 403、人工确认只增加一个版本，以及同 `Idempotency-Key` replay 不重复事件/Outbox。每次使用唯一 `SMOKE-<run-id>` 工单，不删除既有数据。
+
+新增检索评测集覆盖同义改写、口语表达、关键词缺失和硬负例。评分器在同一数据集上计算磁盘制度的 BM25 基线与认证 live hybrid 结果，并逐字核验当前制度引用；它默认从被忽略的 `.smoke/smoke.env` 读取短期调度员 Token，但不会把 Token 写入报告。
+
+原 MVP 综合评测仍严格包含 10 个制度问答、10 个工单查询和 10 个组合问答。新增混合检索集为 24 个正例与 6 个硬负例，其独立验收门槛如下：
+
+| 指标 | 门槛 | 输出 |
+| --- | ---: | ---: |
+| Hybrid Recall@5 | ≥ BM25 且 ≥ 90% | 由 `hybrid_report.json` 实况生成 |
+| 引用有效率 | ≥ 95% | 由 `hybrid_report.json` 实况生成 |
+| 硬负例零引用 | 100% | 由 `hybrid_report.json` 实况生成 |
+
+本地开发检查（使用已安装 Maven，不依赖 wrapper）：
+
+```powershell
+$env:JAVA_HOME='<path-to-jdk-17>'
+mvn -f apps/work-order-service/pom.xml test
 .\.venv\Scripts\python.exe -m pytest apps/ai-service/tests -q
+.\.venv\Scripts\python.exe -m pytest scripts/tests -q
+.\.venv\Scripts\python.exe -m py_compile scripts/smoke_test.py scripts/generate_smoke_fixtures.py
 .\.venv\Scripts\python.exe -m ruff check apps/ai-service/app apps/ai-service/tests eval scripts
 .\.venv\Scripts\python.exe -m mypy --config-file apps/ai-service/pyproject.toml apps/ai-service/app
 ```
+
+本阶段在 2026-07-20 的当前工作树验证结果：Java 全量 168（145 通过、失败 0、错误 0、跳过 23）；Python 为 AI 服务 199 + scripts 11，共 210 通过，另有 3 个 Docker 门控 Python 测试跳过；Ruff check/format、40 个应用源文件 mypy、Python 编译与双 Compose 文件的 `config --quiet` 通过。离线 30 题检索集的 BM25 正例 Recall@5 为 100%（24/24），硬负例零召回为 100%（6/6）。Docker CLI 可用但 Linux Engine named pipe 不存在，因此镜像构建、PostgreSQL/pgvector、FastEmbed 下载、live smoke 与 live hybrid 评测均未执行，不声明端到端或 hybrid 指标通过；Compose 配置解析不能替代运行时验收。
 
 ## 国内模型平台
 
@@ -184,8 +225,8 @@ cd ../..
 
 ## 技术取舍
 
-- **BM25 先于向量库**：MVP 只有 12 个制度段落，BM25 可离线、可复现、无需额外服务；接口已隔离为 `PolicyIndex`，后续可并行引入 pgvector 和混合召回。
-- **Java 持有业务事实**：AI 服务不直连业务表，只调用稳定的只读 DTO，避免把权限、分页和返工关系复制到 Agent 中。
+- **混合召回且可降级**：每租户当前活动制度分别执行 BM25 Top 50 与 512 维 pgvector Top 50，再用固定 RRF 合并；向量不可用时显式返回 BM25 模式和降级 warning。
+- **Java 持有业务事实与写权限**：AI 服务不直连业务表。任何高风险动作先形成服务器权威预览，再由有权的人确认；`AI_SERVICE` 即使同时声明其他角色也不能确认。
 - **确定性事实与生成式解释分离**：状态、时限、负责人和根工单永远不由模型生成，降低幻觉风险。
 - **离线优先**：克隆仓库即可演示；在线模型不可用时可按配置降级，并在 `model.fallback` 和 `error_code` 中显式披露。
 - **合成数据而非脱敏数据**：公开仓库不携带真实业务代码、聊天记录、公司路径或客户数据。
@@ -193,10 +234,10 @@ cd ../..
 ## 项目结构
 
 ```text
-apps/work-order-service/  Spring Boot 只读工单服务
+apps/work-order-service/  Spring Boot 多租户查询与人工确认命令服务
 apps/ai-service/          FastAPI、LangGraph、RAG 与模型网关
 knowledge/policies/       3 份合成制度、12 个可检索段落
-eval/                     30 题评测集与评测器
+eval/                     原 MVP 评测与 30+ 题混合检索评测器
 scripts/                  端到端冒烟脚本
 docs/                     架构、配置和演示说明
 .github/workflows/        无真实密钥的持续集成
@@ -213,6 +254,7 @@ docs/                     架构、配置和演示说明
 ## 文档
 
 - [架构与可信边界](docs/architecture.md)
+- [操作建议 API、JWT、角色、错误与幂等](docs/api/action-proposals.md)
 - [国内模型配置指南](docs/provider-configuration.md)
 - [3 分钟演示脚本](docs/demo-script.md)
 - [MVP 设计规格](docs/superpowers/specs/2026-07-18-enterprise-work-order-ai-assistant-mvp-design.md)
@@ -220,3 +262,6 @@ docs/                     架构、配置和演示说明
 ## License
 
 [MIT](LICENSE)
+
+
+

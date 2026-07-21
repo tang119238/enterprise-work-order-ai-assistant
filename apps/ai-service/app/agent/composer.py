@@ -1,5 +1,5 @@
 from app.api.models import Citation, WorkOrderRecord
-from app.knowledge.models import SearchHit
+from app.knowledge.models import RetrievalHit
 
 
 def format_work_order_facts(records: list[WorkOrderRecord]) -> str:
@@ -22,13 +22,13 @@ def format_work_order_facts(records: list[WorkOrderRecord]) -> str:
     return "\n".join(lines)
 
 
-def format_policy_fallback(hits: list[SearchHit]) -> str:
+def format_policy_fallback(hits: list[RetrievalHit]) -> str:
     if not hits:
         return ""
     return "\n".join(f"根据《{hit.title}》{hit.section}：{hit.text}" for hit in hits[:2])
 
 
-def build_citations(hits: list[SearchHit]) -> list[Citation]:
+def build_citations(hits: list[RetrievalHit]) -> list[Citation]:
     return [
         Citation(
             document_id=hit.document_id,

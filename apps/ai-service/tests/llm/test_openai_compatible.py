@@ -73,3 +73,42 @@ async def test_auth_error_does_not_expose_key_or_response_body() -> None:
             )
 
     assert "test-key" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_structured_request_sends_json_schema_and_request_id() -> None:
+    schema = {"type": "object", "additionalProperties": False}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["x-request-id"] == "quality-request-1"
+        payload = json.loads(request.content)
+        assert payload["response_format"] == {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "structured_response",
+                "strict": True,
+                "schema": schema,
+            },
+        }
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "{}"}}]},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            provider_name="custom",
+            base_url="https://model.example/v1",
+            api_key="test-key",
+            model="demo-model",
+            timeout_seconds=5,
+            client=client,
+        )
+        await provider.generate(
+            LLMRequest(
+                messages=(LLMMessage(role="user", content="return json"),),
+                fallback_text="",
+                response_schema=schema,
+                request_id="quality-request-1",
+            )
+        )

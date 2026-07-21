@@ -1,17 +1,61 @@
 package com.tangmeng.workorder.controller;
 
 import com.tangmeng.workorder.api.ApiError;
+import com.tangmeng.workorder.api.ApiErrorWithPreview;
+import com.tangmeng.workorder.command.ActionProposalExpiredException;
+import com.tangmeng.workorder.command.IdempotencyConflictException;
+import com.tangmeng.workorder.command.WorkOrderVersionConflictException;
+import com.tangmeng.workorder.command.ActionNotPermittedException;
+import com.tangmeng.workorder.command.InvalidCommandException;
+import com.tangmeng.workorder.service.InvalidStateTransitionException;
 import com.tangmeng.workorder.service.WorkOrderNotFoundException;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler(WorkOrderVersionConflictException.class)
+    public ResponseEntity<ApiErrorWithPreview> handleVersionConflict(WorkOrderVersionConflictException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ApiErrorWithPreview.versionConflict(exception.getFreshPreview()));
+    }
+
+    @ExceptionHandler(IdempotencyConflictException.class)
+    public ResponseEntity<ApiError> handleIdempotencyConflict(IdempotencyConflictException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ApiError.of(IdempotencyConflictException.ERROR_CODE, "Idempotency key conflict"));
+    }
+
+    @ExceptionHandler(ActionProposalExpiredException.class)
+    public ResponseEntity<ApiError> handleExpired(ActionProposalExpiredException exception) {
+        return ResponseEntity.status(HttpStatus.GONE)
+            .body(ApiError.of(ActionProposalExpiredException.ERROR_CODE, "Action proposal expired"));
+    }
+
+    @ExceptionHandler(InvalidCommandException.class)
+    public ResponseEntity<ApiError> handleInvalidCommand(Exception exception) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+            .body(ApiError.of("INVALID_COMMAND", "Invalid command"));
+    }
+
+    @ExceptionHandler(ActionNotPermittedException.class)
+    public ResponseEntity<ApiError> handleActionNotPermitted(ActionNotPermittedException exception) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+            .body(ApiError.of(ActionNotPermittedException.ERROR_CODE, "Action not permitted"));
+    }
+
+    @ExceptionHandler(InvalidStateTransitionException.class)
+    public ResponseEntity<ApiError> handleInvalidTransition(InvalidStateTransitionException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ApiError.of(InvalidStateTransitionException.ERROR_CODE, "Invalid state transition"));
+    }
 
     @ExceptionHandler(WorkOrderNotFoundException.class)
     public ResponseEntity<ApiError> handleNotFound(WorkOrderNotFoundException exception) {
@@ -21,6 +65,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler({
         HandlerMethodValidationException.class,
+        MethodArgumentNotValidException.class,
         ConstraintViolationException.class,
         MethodArgumentTypeMismatchException.class
     })

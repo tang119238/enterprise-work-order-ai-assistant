@@ -1,0 +1,17 @@
+services:
+  ai-service:
+    environment:
+      JWT_ISSUER: ${SMOKE_JWT_ISSUER:?generate .smoke/smoke.env first}
+      JWT_AUDIENCE: ${SMOKE_JWT_AUDIENCE:?generate .smoke/smoke.env first}
+      JWT_PUBLIC_KEY_PATH: /run/secrets/smoke-jwt-public.pem
+    volumes:
+      - ${SMOKE_JWT_PUBLIC_KEY_PATH:?generate .smoke/smoke.env first}:/run/secrets/smoke-jwt-public.pem:ro
+
+  work-order-service:
+    environment:
+      JWT_ISSUER_URI: ${SMOKE_JWT_ISSUER:?generate .smoke/smoke.env first}
+      JWT_AUDIENCE: ${SMOKE_JWT_AUDIENCE:?generate .smoke/smoke.env first}
+      JWT_JWK_SET_URI: ""
+      JWT_PUBLIC_KEY_LOCATION: file:/run/secrets/smoke-jwt-public.pem
+    volumes:
+      - ${SMOKE_JWT_PUBLIC_KEY_PATH:?generate .smoke/smoke.env first}:/run/secrets/smoke-jwt-public.pem:ro

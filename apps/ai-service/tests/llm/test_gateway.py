@@ -2,8 +2,13 @@ from collections.abc import Callable
 
 import pytest
 
-from app.llm.contracts import LLMMessage, LLMRequest, LLMResult
-from app.llm.errors import ProviderAuthError, ProviderTimeoutError
+from app.llm.contracts import (
+    LLMMessage,
+    LLMRequest,
+    LLMResult,
+    StructuredLLMRequest,
+)
+from app.llm.errors import ProviderAuthError, ProviderBadResponseError, ProviderTimeoutError
 from app.llm.gateway import LLMGateway
 from app.llm.offline import OfflineTemplateProvider
 
@@ -79,3 +84,73 @@ def request() -> LLMRequest:
         messages=(LLMMessage(role="user", content="问题"),),
         fallback_text="可信离线答案",
     )
+
+
+class StructuredProvider:
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.requests: list[LLMRequest] = []
+
+    async def generate(self, request: LLMRequest) -> LLMResult:
+        self.requests.append(request)
+        return LLMResult(
+            content=self.content,
+            provider="synthetic",
+            model="structured-model",
+            latency_ms=11,
+        )
+
+
+def structured_request() -> StructuredLLMRequest:
+    return StructuredLLMRequest(
+        messages=(LLMMessage(role="user", content="return json"),),
+        response_schema={"type": "object"},
+        prompt_version="v1",
+        request_id="request-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_structured_decodes_object_and_passes_schema_metadata() -> None:
+    provider = StructuredProvider('{"verdict":"PASS"}')
+    gateway = LLMGateway(
+        provider=provider,
+        fallback_provider=OfflineTemplateProvider(),
+        max_retries=0,
+        fallback_enabled=True,
+    )
+
+    result = await gateway.generate_structured(structured_request())
+
+    assert result.payload == {"verdict": "PASS"}
+    assert result.raw_content == '{"verdict":"PASS"}'
+    assert provider.requests[0].response_schema == {"type": "object"}
+    assert provider.requests[0].request_id == "request-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["not-json", "[]", "null"])
+async def test_generate_structured_rejects_non_object_json(content: str) -> None:
+    gateway = LLMGateway(
+        provider=StructuredProvider(content),
+        fallback_provider=OfflineTemplateProvider(),
+        max_retries=0,
+        fallback_enabled=True,
+    )
+
+    with pytest.raises(ProviderBadResponseError):
+        await gateway.generate_structured(structured_request())
+
+
+@pytest.mark.asyncio
+async def test_generate_structured_never_uses_template_fallback() -> None:
+    provider = FailingProvider(lambda: ProviderTimeoutError())
+    gateway = LLMGateway(
+        provider=provider,
+        fallback_provider=OfflineTemplateProvider(),
+        max_retries=0,
+        fallback_enabled=True,
+    )
+
+    with pytest.raises(ProviderTimeoutError):
+        await gateway.generate_structured(structured_request())
