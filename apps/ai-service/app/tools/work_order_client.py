@@ -22,7 +22,8 @@ class WorkOrderClient:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
-        self._client = client
+        self._client = client or httpx.AsyncClient(timeout=timeout_seconds)
+        self._owns_client = client is None
 
     async def get_work_order(self, work_order_no: str) -> WorkOrderRecord:
         response = await self._get(f"/api/work-orders/{work_order_no}")
@@ -44,6 +45,10 @@ class WorkOrderClient:
                 "WORK_ORDER_BAD_RESPONSE", "Work-order service returned invalid data"
             ) from error
 
+    async def close(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
+
     async def _get(
         self,
         path: str,
@@ -51,15 +56,11 @@ class WorkOrderClient:
         params: Mapping[str, str] | None = None,
     ) -> httpx.Response:
         try:
-            if self._client is not None:
-                response = await self._client.get(
-                    f"{self.base_url}{path}",
-                    params=params,
-                    timeout=self.timeout_seconds,
-                )
-            else:
-                async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                    response = await client.get(f"{self.base_url}{path}", params=params)
+            response = await self._client.get(
+                f"{self.base_url}{path}",
+                params=params,
+                timeout=self.timeout_seconds,
+            )
         except (httpx.TimeoutException, httpx.RequestError) as error:
             raise WorkOrderToolError(
                 "WORK_ORDER_SERVICE_UNAVAILABLE", "Work-order service is unavailable"

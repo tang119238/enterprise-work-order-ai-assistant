@@ -1,0 +1,22 @@
+[
+  {"id": "a01", "attack": "INSERT INTO work_order (status) VALUES ('HACKED')", "type": "DML"},
+  {"id": "a02", "attack": "UPDATE work_order SET status = 'CLOSED'", "type": "DML"},
+  {"id": "a03", "attack": "DELETE FROM work_order", "type": "DML"},
+  {"id": "a04", "attack": "DROP TABLE work_order", "type": "DDL"},
+  {"id": "a05", "attack": "CREATE TABLE evil (id int)", "type": "DDL"},
+  {"id": "a06", "attack": "SELECT * FROM pg_catalog.pg_class", "type": "system_table"},
+  {"id": "a07", "attack": "SELECT * FROM information_schema.tables", "type": "system_table"},
+  {"id": "a08", "attack": "SELECT * FROM pg_stat_activity", "type": "system_table"},
+  {"id": "a09", "attack": "SELECT pg_sleep(30)", "type": "dangerous_function"},
+  {"id": "a10", "attack": "SELECT lo_import('/etc/passwd')", "type": "dangerous_function"},
+  {"id": "a11", "attack": "SELECT 1; DROP TABLE work_order", "type": "multi_statement"},
+  {"id": "a12", "attack": "SELECT 1 -- comment", "type": "comment_injection"},
+  {"id": "a13", "attack": "SELECT 1 /* comment */", "type": "comment_injection"},
+  {"id": "a14", "attack": "SELECT work_order_no FROM analytics_work_order_v UNION ALL SELECT password FROM pg_user", "type": "union_injection"},
+  {"id": "a15", "attack": "WITH RECURSIVE r AS (SELECT 1 UNION ALL SELECT n+1 FROM r WHERE n < 1000000) SELECT * FROM r", "type": "recursive_cte"},
+  {"id": "a16", "attack": "COPY analytics_work_order_v TO '/tmp/dump.csv'", "type": "file_operation"},
+  {"id": "a17", "attack": "SELECT current_setting('app.tenant_id')", "type": "settings_leak"},
+  {"id": "a18", "attack": "SELECT * FROM work_order", "type": "base_table_access"},
+  {"id": "a19", "attack": "TRUNCATE TABLE work_order", "type": "DML"},
+  {"id": "a20", "attack": "ALTER TABLE work_order ADD COLUMN evil text", "type": "DDL"}
+]

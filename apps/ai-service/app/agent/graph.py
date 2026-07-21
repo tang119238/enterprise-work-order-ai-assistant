@@ -2,6 +2,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Protocol
+from uuid import UUID
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -20,14 +21,19 @@ from app.api.models import (
     WorkOrderRecord,
     WorkOrderSearchPage,
 )
-from app.knowledge.models import SearchHit
+from app.knowledge.models import RetrievalResult
 from app.llm.contracts import LLMMessage, LLMRequest, LLMResult
 from app.llm.gateway import LLMGateway
 from app.tools.work_order_client import WorkOrderToolError
 
 
 class PolicyIndex(Protocol):
-    def search(self, query: str, limit: int = 5) -> list[SearchHit]: ...
+    async def search(
+        self,
+        tenant_id: UUID,
+        query: str,
+        limit: int = 5,
+    ) -> RetrievalResult: ...
 
 
 class WorkOrderTools(Protocol):
@@ -49,7 +55,11 @@ def build_graph(
     dependencies: AgentDependencies,
 ) -> CompiledStateGraph[AgentState, None, AgentState, AgentState]:
     async def normalize_input(state: AgentState) -> dict[str, object]:
+        tenant_id = state.get("tenant_id")
+        if not isinstance(tenant_id, UUID):
+            raise TypeError("authenticated tenant_id must be a UUID")
         return {
+            "tenant_id": tenant_id,
             "message": state["message"].strip(),
             "request_id": str(uuid.uuid4()),
             "started_at": time.perf_counter(),
@@ -63,33 +73,48 @@ def build_graph(
         return {"route": route_intent(state["message"])}
 
     async def retrieve_knowledge(state: AgentState) -> dict[str, object]:
-        return {"knowledge_hits": dependencies.index.search(state["message"], limit=5)}
+        retrieval = await dependencies.index.search(
+            state["tenant_id"],
+            state["message"],
+            limit=5,
+        )
+        return {
+            "knowledge_hits": list(retrieval.hits),
+            "retrieval_mode": retrieval.mode,
+            "warnings": [*state.get("warnings", []), *retrieval.warnings],
+        }
 
     async def call_work_order_tool(state: AgentState) -> dict[str, object]:
         work_order_no = extract_work_order_no(state["message"])
         tool_calls = list(state.get("tool_calls", []))
+        if work_order_no and (state["route"] == "combined" or "返工" in state["message"]):
+            name = "get_rework_chain"
+            arguments: dict[str, str | int | float | bool | None] = {"work_order_no": work_order_no}
+        elif work_order_no:
+            name = "get_work_order"
+            arguments = {"work_order_no": work_order_no}
+        else:
+            name = "search_work_orders"
+            arguments = {}
         try:
-            if work_order_no and (state["route"] == "combined" or "返工" in state["message"]):
-                records = await dependencies.work_order_client.get_rework_chain(work_order_no)
-                name = "get_rework_chain"
-                arguments: dict[str, str | int | float | bool | None] = {
-                    "work_order_no": work_order_no
-                }
-            elif work_order_no:
+            if name == "get_rework_chain":
+                if work_order_no is None:
+                    raise RuntimeError("work-order number routing invariant failed")
+                records: list[
+                    WorkOrderRecord
+                ] = await dependencies.work_order_client.get_rework_chain(work_order_no)
+            elif name == "get_work_order":
+                if work_order_no is None:
+                    raise RuntimeError("work-order number routing invariant failed")
                 records = [await dependencies.work_order_client.get_work_order(work_order_no)]
-                name = "get_work_order"
-                arguments = {"work_order_no": work_order_no}
             else:
                 filters = extract_search_filters(state["message"])
+                arguments = dict(filters)
                 page = await dependencies.work_order_client.search_work_orders(filters)
                 records = page.items
-                name = "search_work_orders"
-                arguments = dict(filters)
             tool_calls.append(ToolCallRecord(name=name, arguments=arguments, status="success"))
             return {"work_orders": records, "tool_calls": tool_calls}
         except WorkOrderToolError as error:
-            name = "get_work_order" if work_order_no else "search_work_orders"
-            arguments = {"work_order_no": work_order_no} if work_order_no else {}
             tool_calls.append(ToolCallRecord(name=name, arguments=arguments, status="error"))
             return {
                 "work_orders": [],
@@ -164,6 +189,7 @@ def build_graph(
                 fallback=model_result.fallback,
                 error_code=model_result.error_code,
             ),
+            retrieval_mode=state.get("retrieval_mode", "none"),
             warnings=state.get("warnings", []),
         )
         return {"response": response}

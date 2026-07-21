@@ -36,7 +36,8 @@ class OpenAICompatibleProvider:
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.capabilities = capabilities or OpenAICompatibleCapabilities()
-        self._client = client
+        self._client = client or httpx.AsyncClient(timeout=timeout_seconds)
+        self._owns_client = client is None
 
     async def generate(self, request: LLMRequest) -> LLMResult:
         started = time.perf_counter()
@@ -49,7 +50,16 @@ class OpenAICompatibleProvider:
         }
         if self.capabilities.supports_temperature:
             payload["temperature"] = request.temperature
-        response = await self._post(payload)
+        if request.response_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_response",
+                    "strict": True,
+                    "schema": request.response_schema,
+                },
+            }
+        response = await self._post(payload, request_id=request.request_id)
         raise_for_provider_status(response)
         try:
             body = response.json()
@@ -68,22 +78,26 @@ class OpenAICompatibleProvider:
             output_tokens=_optional_int(usage.get("completion_tokens")),
         )
 
-    async def _post(self, payload: dict[str, Any]) -> httpx.Response:
+    async def close(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
+
+    async def _post(
+        self,
+        payload: dict[str, Any],
+        *,
+        request_id: str | None = None,
+    ) -> httpx.Response:
         headers = {"Authorization": f"Bearer {self.api_key}"}
+        if request_id is not None:
+            headers["X-Request-ID"] = request_id
         try:
-            if self._client is not None:
-                return await self._client.post(
-                    f"{self.base_url}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=self.timeout_seconds,
-                )
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                return await client.post(
-                    f"{self.base_url}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
+            return await self._client.post(
+                f"{self.base_url}/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=self.timeout_seconds,
+            )
         except httpx.TimeoutException as error:
             raise ProviderTimeoutError from error
         except httpx.RequestError as error:

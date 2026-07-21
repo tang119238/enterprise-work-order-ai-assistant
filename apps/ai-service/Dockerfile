@@ -6,12 +6,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 COPY apps/ai-service/pyproject.toml ./pyproject.toml
-COPY apps/ai-service/app ./app
 RUN python -m pip install --upgrade pip \
     && python -m pip install . \
     && groupadd --system app \
-    && useradd --system --gid app --home-dir /nonexistent --shell /usr/sbin/nologin app
+    && useradd --system --gid app --home-dir /nonexistent --shell /usr/sbin/nologin app \
+    && mkdir -p /models \
+    && chown app:app /models
+COPY apps/ai-service/app ./app
+COPY apps/ai-service/alembic.ini ./alembic.ini
+COPY apps/ai-service/alembic ./alembic
 COPY knowledge ./knowledge
+COPY apps/ai-service/security/dev-jwt-public-key.pem ./security/dev-jwt-public-key.pem
 
 USER app
 EXPOSE 8000

@@ -1,6 +1,6 @@
 import pytest
 
-from app.agent.router import route_intent
+from app.agent.router import extract_search_filters, route_intent
 
 
 @pytest.mark.parametrize(
@@ -18,3 +18,14 @@ def test_routes(message: str, expected: str) -> None:
 
 def test_default_route_is_knowledge() -> None:
     assert route_intent("验收有什么要求？") == "knowledge"
+
+
+def test_extract_search_filters_with_assignee() -> None:
+    filters = extract_search_filters("林晓的工单有哪些")
+    assert filters["assigneeName"] == "林晓"
+
+
+def test_extract_search_filters_with_status_and_project() -> None:
+    filters = extract_search_filters("查询星河中心处理中工单")
+    assert filters["status"] == "PROCESSING"
+    assert filters["projectName"] == "星河中心"

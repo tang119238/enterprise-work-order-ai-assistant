@@ -16,6 +16,13 @@ dependencies = [
     "langgraph>=0.4,<2",
     "jieba>=0.42.1,<1",
     "rank-bm25>=0.2.2,<1",
+    "sqlalchemy[asyncio]>=2.0,<3",
+    "asyncpg>=0.30,<1",
+    "alembic>=1.15,<2",
+    "pgvector>=0.4,<1",
+    "fastembed>=0.7,<1",
+    "cryptography>=45,<47",
+    "sqlglot>=26,<28",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +32,7 @@ dev = [
     "respx>=0.22,<1",
     "ruff>=0.11,<1",
     "mypy>=1.15,<2",
+    "testcontainers[postgres]>=4.10,<5",
 ]
 
 [tool.setuptools.packages.find]
@@ -50,3 +58,4 @@ packages = ["app"]
 [[tool.mypy.overrides]]
 module = ["jieba", "rank_bm25"]
 ignore_missing_imports = true
+
