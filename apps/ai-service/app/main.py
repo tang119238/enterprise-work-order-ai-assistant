@@ -117,8 +117,6 @@ def create_app(
         application.state.retrieval_lifecycle = active_lifecycle
         application.state.quality_lifecycle = active_quality_lifecycle
         application.state.provider_name = provider_name
-    application.state.settings = settings
-    application.state.gateway = runtime_dependencies.gateway if runtime_dependencies else None
         retrieval_started = False
         try:
             await active_lifecycle.start()
@@ -221,10 +219,10 @@ def create_app(
             ) from None
         return ChatResponse.model_validate(result["response"])
 
-    
+
     application.include_router(analytics_router)
 
-@application.get("/health")
+    @application.get("/health")
     async def health() -> dict[str, object]:
         lifecycle: RetrievalLifecycle = application.state.retrieval_lifecycle
         return {
@@ -406,4 +404,6 @@ async def _close_build_resources(*resources: object | None) -> None:
 
 
 app = create_app()
+
+
 
