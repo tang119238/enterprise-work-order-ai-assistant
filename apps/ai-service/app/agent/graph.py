@@ -51,6 +51,16 @@ class AgentDependencies:
     gateway: LLMGateway
 
 
+SYSTEM_PROMPT = """你是企业工单 AI 助手，负责帮助用户查询工单、解答制度问题。
+
+回答规则：
+1. 如果提供了工单事实，用简洁专业的语言概括，不要逐字段罗列
+2. 如果提供了制度片段，基于片段解释规则，标注引用来源
+3. 如果工单未找到，友好提示用户检查工单号
+4. 如果问题与工单/制度无关，礼貌说明你是工单助手，引导用户问相关问题
+5. 回答要简洁，控制在 200 字以内"""
+
+
 def build_graph(
     dependencies: AgentDependencies,
 ) -> CompiledStateGraph[AgentState, None, AgentState, AgentState]:
@@ -58,9 +68,22 @@ def build_graph(
         tenant_id = state.get("tenant_id")
         if not isinstance(tenant_id, UUID):
             raise TypeError("authenticated tenant_id must be a UUID")
+        message = state["message"].strip()
+        # 空问题处理
+        if not message:
+            return {
+                "tenant_id": tenant_id,
+                "message": "",
+                "request_id": str(uuid.uuid4()),
+                "started_at": time.perf_counter(),
+                "knowledge_hits": [],
+                "work_orders": [],
+                "tool_calls": [],
+                "warnings": ["EMPTY_MESSAGE"],
+            }
         return {
             "tenant_id": tenant_id,
-            "message": state["message"].strip(),
+            "message": message,
             "request_id": str(uuid.uuid4()),
             "started_at": time.perf_counter(),
             "knowledge_hits": [],
@@ -70,9 +93,13 @@ def build_graph(
         }
 
     async def route(state: AgentState) -> dict[str, object]:
+        if not state["message"]:
+            return {"route": "knowledge"}
         return {"route": route_intent(state["message"])}
 
     async def retrieve_knowledge(state: AgentState) -> dict[str, object]:
+        if not state["message"]:
+            return {"knowledge_hits": [], "retrieval_mode": "none", "warnings": state.get("warnings", [])}
         retrieval = await dependencies.index.search(
             state["tenant_id"],
             state["message"],
@@ -116,55 +143,69 @@ def build_graph(
             return {"work_orders": records, "tool_calls": tool_calls}
         except WorkOrderToolError as error:
             tool_calls.append(ToolCallRecord(name=name, arguments=arguments, status="error"))
+            # 生成友好的错误提示
+            if error.code == "WORK_ORDER_NOT_FOUND":
+                friendly_msg = f"未找到工单 {work_order_no}，请检查工单号是否正确（格式：WO-YYYYMMDD-NNN）"
+            else:
+                friendly_msg = "工单服务暂时不可用，请稍后再试"
             return {
                 "work_orders": [],
                 "tool_calls": tool_calls,
                 "warnings": [*state.get("warnings", []), error.code],
+                "friendly_error": friendly_msg,
             }
 
     async def compose_answer(state: AgentState) -> dict[str, object]:
+        # 空问题特殊处理
+        if "EMPTY_MESSAGE" in state.get("warnings", []):
+            return {
+                "answer": "请输入您的问题，我可以帮您：\n- 查询工单状态和详情\n- 解答返工规则、SLA 时限等制度问题",
+                "citations": [],
+                "model_result": LLMResult(content="", provider="offline", model="helper", latency_ms=0),
+            }
+
         facts = format_work_order_facts(state.get("work_orders", []))
         hits = state.get("knowledge_hits", [])
         policy_fallback = format_policy_fallback(hits)
+        friendly_error = state.get("friendly_error", "")
+
+        # 构建上下文
+        context_parts = []
+        if friendly_error:
+            context_parts.append(f"系统提示：{friendly_error}")
+        if facts:
+            context_parts.append(f"工单事实：\n{facts}")
         if hits:
-            context = "\n\n".join(f"[{hit.document_id} | {hit.section}] {hit.text}" for hit in hits)
+            policy_text = "\n\n".join(f"[{hit.document_id} | {hit.section}] {hit.text}" for hit in hits)
+            context_parts.append(f"制度片段：\n{policy_text}")
+
+        context = "\n\n".join(context_parts) if context_parts else ""
+
+        # 所有回答都经过 AI 润色
+        if context:
             model_result = await dependencies.gateway.generate(
                 LLMRequest(
                     messages=(
-                        LLMMessage(
-                            role="system",
-                            content=(
-                                "你是企业工单制度助手。只依据提供的制度片段解释规则，"
-                                "不生成工单事实、引用编号或工具调用。"
-                            ),
-                        ),
-                        LLMMessage(
-                            role="user",
-                            content=f"问题：{state['message']}\n\n制度片段：\n{context}",
-                        ),
+                        LLMMessage(role="system", content=SYSTEM_PROMPT),
+                        LLMMessage(role="user", content=f"用户问题：{state['message']}\n\n{context}"),
                     ),
-                    fallback_text=policy_fallback,
+                    fallback_text=friendly_error or policy_fallback or facts,
                 )
             )
-            answer = f"{facts}\n\n{model_result.content}" if facts else model_result.content
-        elif facts:
-            model_result = LLMResult(
-                content=facts,
-                provider="offline",
-                model="deterministic-facts",
-                latency_ms=0,
-            )
-            answer = facts
         else:
-            model_result = LLMResult(
-                content=policy_fallback,
-                provider="offline",
-                model="deterministic-template",
-                latency_ms=0,
+            # 无任何上下文，AI 直接回答
+            model_result = await dependencies.gateway.generate(
+                LLMRequest(
+                    messages=(
+                        LLMMessage(role="system", content=SYSTEM_PROMPT),
+                        LLMMessage(role="user", content=state["message"]),
+                    ),
+                    fallback_text="我是企业工单 AI 助手，可以帮您查询工单、解答制度问题。请问有什么可以帮您？",
+                )
             )
-            answer = policy_fallback
+
         return {
-            "answer": answer,
+            "answer": model_result.content,
             "citations": build_citations(hits),
             "model_result": model_result,
         }
@@ -190,7 +231,7 @@ def build_graph(
                 error_code=model_result.error_code,
             ),
             retrieval_mode=state.get("retrieval_mode", "none"),
-            warnings=state.get("warnings", []),
+            warnings=[w for w in state.get("warnings", []) if w != "EMPTY_MESSAGE"],
         )
         return {"response": response}
 
