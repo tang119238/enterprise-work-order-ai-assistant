@@ -38,6 +38,7 @@ from app.llm.errors import ProviderError
 from app.llm.gateway import LLMGateway
 from app.llm.offline import OfflineTemplateProvider
 from app.llm.registry import build_provider
+from app.analytics.router import router as analytics_router
 from app.quality.callback import QualityCallbackClient, QualityCallbackWorker
 from app.quality.event_client import QualityEventClient
 from app.quality.processor import QualityProcessor
@@ -116,6 +117,8 @@ def create_app(
         application.state.retrieval_lifecycle = active_lifecycle
         application.state.quality_lifecycle = active_quality_lifecycle
         application.state.provider_name = provider_name
+    application.state.settings = settings
+    application.state.gateway = runtime_dependencies.gateway if runtime_dependencies else None
         retrieval_started = False
         try:
             await active_lifecycle.start()
@@ -149,6 +152,8 @@ def create_app(
     application.state.retrieval_lifecycle = fallback_lifecycle
     application.state.quality_lifecycle = fallback_quality_lifecycle
     application.state.provider_name = provider_name
+    application.state.settings = settings
+    application.state.gateway = runtime_dependencies.gateway if runtime_dependencies else None
     application.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -216,7 +221,10 @@ def create_app(
             ) from None
         return ChatResponse.model_validate(result["response"])
 
-    @application.get("/health")
+    
+    application.include_router(analytics_router)
+
+@application.get("/health")
     async def health() -> dict[str, object]:
         lifecycle: RetrievalLifecycle = application.state.retrieval_lifecycle
         return {
@@ -398,3 +406,4 @@ async def _close_build_resources(*resources: object | None) -> None:
 
 
 app = create_app()
+

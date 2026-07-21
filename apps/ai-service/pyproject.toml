@@ -22,6 +22,7 @@ dependencies = [
     "pgvector>=0.4,<1",
     "fastembed>=0.7,<1",
     "cryptography>=45,<47",
+    "sqlglot>=26,<28",
 ]
 
 [project.optional-dependencies]
@@ -57,3 +58,4 @@ packages = ["app"]
 [[tool.mypy.overrides]]
 module = ["jieba", "rank_bm25"]
 ignore_missing_imports = true
+

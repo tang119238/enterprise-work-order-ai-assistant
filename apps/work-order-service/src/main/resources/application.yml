@@ -33,3 +33,11 @@ management:
     health:
       probes:
         enabled: true
+
+analytics:
+  datasource:
+    url: ${ANALYTICS_DB_URL:${spring.datasource.url}}
+    username: ${ANALYTICS_DB_USERNAME:analytics_reader}
+    password: ${ANALYTICS_DB_PASSWORD:}
+    maximum-pool-size: 5
+    connection-timeout: 5000

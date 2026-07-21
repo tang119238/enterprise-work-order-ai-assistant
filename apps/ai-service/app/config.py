@@ -55,7 +55,9 @@ class Settings(BaseSettings):
         allow_inf_nan=False,
     )
     quality_service_token: SecretStr | None = None
-    quality_service_tokens: dict[UUID, SecretStr] = Field(default_factory=dict)
+        quality_service_tokens: dict[UUID, SecretStr] = Field(default_factory=dict)
+    work_order_service_url: str = "http://localhost:8080"
+    analytics_service_token: SecretStr | None = None
 
     @field_validator("embedding_dimensions", mode="before")
     @classmethod
@@ -90,3 +92,4 @@ class Settings(BaseSettings):
             for tenant_id, token in self.quality_service_tokens.items()
             if token.get_secret_value().strip()
         }
+

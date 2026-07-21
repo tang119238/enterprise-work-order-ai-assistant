@@ -61,6 +61,11 @@ public class SecurityConfig {
                         AuthorityAuthorizationManager.hasAuthority("SCOPE_quality:callback"),
                         AuthorityAuthorizationManager.hasAuthority("AI_SERVICE")
                     ))
+                .requestMatchers("/internal/analytics/**")
+                    .access(AuthorizationManagers.allOf(
+                        AuthorityAuthorizationManager.hasAuthority("SCOPE_analytics:execute"),
+                        AuthorityAuthorizationManager.hasAuthority("AI_SERVICE")
+                    ))
                 .requestMatchers("/api/**", "/internal/**").hasAnyAuthority(TENANT_ROLES)
                 .anyRequest().denyAll())
             .oauth2ResourceServer(resourceServer -> resourceServer
@@ -141,3 +146,4 @@ public class SecurityConfig {
         objectMapper.writeValue(response.getOutputStream(), ApiError.of(code, message));
     }
 }
+

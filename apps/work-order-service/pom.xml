@@ -32,6 +32,13 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+
+        <dependency>
+            <groupId>com.github.jsqlparser</groupId>
+            <artifactId>jsqlparser</artifactId>
+            <version>5.0</version>
+        </dependency>
+
         </dependencies>
     </dependencyManagement>
 
@@ -110,6 +117,13 @@
             <artifactId>postgresql</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <dependency>
+            <groupId>com.github.jsqlparser</groupId>
+            <artifactId>jsqlparser</artifactId>
+            <version>5.0</version>
+        </dependency>
+
     </dependencies>
 
     <build>
@@ -129,3 +143,4 @@
         </plugins>
     </build>
 </project>
+
