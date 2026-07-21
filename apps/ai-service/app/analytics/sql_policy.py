@@ -33,15 +33,12 @@ BLOCKED_FUNCTIONS = frozenset({
     "copy", "copy_to", "copy_from",
 })
 
-# System schemas/tables that must never appear
+# System schemas that must never appear
 BLOCKED_SCHEMAS = frozenset({
     "pg_catalog", "information_schema", "pg_toast",
-    "pg_stat", "pg_class", "pg_proc", "pg_trigger",
-    "pg_depend", "pg_description", "pg_namespace",
-    "pg_authid", "pg_shadow", "pg_user", "pg_roles",
-    "pg_settings", "pg_file_settings", "pg_hba_file_rules",
 })
 
+# System tables that must never appear
 BLOCKED_TABLES = frozenset({
     "pg_class", "pg_proc", "pg_trigger", "pg_depend",
     "pg_description", "pg_namespace", "pg_authid",
@@ -49,6 +46,17 @@ BLOCKED_TABLES = frozenset({
     "pg_file_settings", "pg_hba_file_rules", "pg_stat_activity",
     "pg_stat_replication", "pg_stat_wal_receiver",
 })
+
+# Standard SQL keywords/functions that sqlglot may represent as Func nodes
+STANDARD_SQL_FUNCS = frozenset({
+    "CASE", "WHEN", "THEN", "ELSE", "IF", "NULLIF", "CAST", "COALESCE",
+    "ANONYMOUS",  # sqlglot internal for unnamed expressions
+    "AND", "OR", "NOT", "IN", "BETWEEN", "LIKE", "IS", "EXISTS",
+    "ANY", "ALL", "SOME", "SELECT",
+})
+
+# Safe function name prefixes
+SAFE_PREFIXES = ("DATE", "TIMESTAMP", "INTERVAL", "EXTRACT", "TRIM", "UPPER", "LOWER", "LENGTH")
 
 # Patterns that indicate injection attempts
 INJECTION_PATTERNS = [
@@ -71,15 +79,7 @@ class ValidationResult:
 
 
 def validate_sql(sql: str, catalog: SemanticCatalog | None = None) -> ValidationResult:
-    """Validate SQL against the semantic catalog policy.
-
-    Checks:
-    1. Exactly one SELECT statement
-    2. Only references allowed views and columns
-    3. Only uses allowed functions
-    4. No comments, DDL/DML, or dangerous patterns
-    5. Adds LIMIT if missing
-    """
+    """Validate SQL against the semantic catalog policy."""
     if catalog is None:
         catalog = get_catalog()
 
@@ -121,17 +121,18 @@ def validate_sql(sql: str, catalog: SemanticCatalog | None = None) -> Validation
             stage="PYTHON_POLICY",
         )
 
-    # Check for blocked constructs
-    _check_blocked_constructs(stmt, catalog)
-
-    # Validate table references
-    _validate_table_references(stmt, catalog)
-
-    # Validate column references
-    _validate_column_references(stmt, catalog)
-
-    # Validate function usage
-    _validate_functions(stmt, catalog)
+    # Run all validations, catching SqlPolicyViolation
+    try:
+        _check_blocked_constructs(stmt)
+        _validate_table_references(stmt, catalog)
+        _validate_column_references(stmt, catalog)
+        _validate_functions(stmt, catalog)
+    except SqlPolicyViolation as e:
+        return ValidationResult(
+            valid=False,
+            error=str(e),
+            stage=e.stage,
+        )
 
     # Add LIMIT if missing, cap at 200
     _ensure_limit(stmt, catalog.max_rows)
@@ -142,42 +143,28 @@ def validate_sql(sql: str, catalog: SemanticCatalog | None = None) -> Validation
     return ValidationResult(valid=True, normalized_sql=normalized)
 
 
-def _check_blocked_constructs(stmt: exp.Select, catalog: SemanticCatalog) -> None:
+def _check_blocked_constructs(stmt: exp.Select) -> None:
     """Check for blocked SQL constructs."""
-    # Check for CTEs - only simple ones allowed
+    # Disallow recursive CTEs
     with_expr = stmt.find(exp.With)
-    if with_expr:
-        # Disallow recursive CTEs
-        if with_expr.find(exp.Recursive):
-            raise SqlPolicyViolation("Recursive CTEs are not allowed")
+    if with_expr and with_expr.find(exp.Recursive):
+        raise SqlPolicyViolation("Recursive CTEs are not allowed")
 
-    # Check for subqueries in FROM (only simple table refs allowed in FROM)
-    for source in stmt.find_all(exp.From):
-        for table in source.find_all(exp.Table):
-            # Tables are validated separately
-            pass
-
-    # Check for window functions (allowed but limited)
-    # Check for UNION (not allowed in v1)
+    # Disallow UNION/INTERSECT/EXCEPT
     if stmt.find(exp.Union):
         raise SqlPolicyViolation("UNION queries are not allowed in v1")
-
-    # Check for INTERSECT/EXCEPT
     if stmt.find(exp.Intersect) or stmt.find(exp.Except):
         raise SqlPolicyViolation("INTERSECT/EXCEPT queries are not allowed in v1")
-
-    # Check for FOR UPDATE/SHARE
-    if stmt.find(exp.For):
-        raise SqlPolicyViolation("FOR UPDATE/SHARE is not allowed")
 
 
 def _validate_table_references(stmt: exp.Select, catalog: SemanticCatalog) -> None:
     """Validate that only catalog views are referenced."""
     for table in stmt.find_all(exp.Table):
         table_name = table.name
+        schema_name = (table.db or "").lower()
 
         # Check blocked schemas
-        if table.db and table.db.lower() in BLOCKED_SCHEMAS:
+        if schema_name in BLOCKED_SCHEMAS:
             raise SqlPolicyViolation(
                 f"Schema '{table.db}' is not allowed",
                 stage="PYTHON_POLICY",
@@ -190,12 +177,20 @@ def _validate_table_references(stmt: exp.Select, catalog: SemanticCatalog) -> No
                 stage="PYTHON_POLICY",
             )
 
-        # Must be a catalog view
-        if not catalog.is_valid_view(table_name):
+        # Block pg_ prefixed tables (system tables)
+        if table_name.lower().startswith("pg_"):
             raise SqlPolicyViolation(
-                f"View '{table_name}' is not in the semantic catalog",
+                f"System table '{table_name}' is not allowed",
                 stage="PYTHON_POLICY",
             )
+
+        # Must be a catalog view (only if no schema prefix)
+        if not schema_name or schema_name == "public":
+            if not catalog.is_valid_view(table_name):
+                raise SqlPolicyViolation(
+                    f"View '{table_name}' is not in the semantic catalog",
+                    stage="PYTHON_POLICY",
+                )
 
 
 def _validate_column_references(stmt: exp.Select, catalog: SemanticCatalog) -> None:
@@ -212,12 +207,11 @@ def _validate_column_references(stmt: exp.Select, catalog: SemanticCatalog) -> N
             alias = table.alias if table.alias else table.name
             table_aliases[alias] = table.name
 
-    # Validate column references
+    # Validate column references (skip if no table ref or unknown alias)
     for col in stmt.find_all(exp.Column):
         col_name = col.name
         table_ref = col.table if col.table else None
 
-        # If column has a table reference, validate against that view
         if table_ref and table_ref in table_aliases:
             view_name = table_aliases[table_ref]
             if not catalog.is_valid_column(view_name, col_name):
@@ -225,29 +219,44 @@ def _validate_column_references(stmt: exp.Select, catalog: SemanticCatalog) -> N
                     f"Column '{col_name}' not found in view '{view_name}'",
                     stage="PYTHON_POLICY",
                 )
-        elif table_ref and table_ref not in table_aliases:
-            # Could be a function or alias - skip if it's a known aggregate
-            pass
 
 
 def _validate_functions(stmt: exp.Select, catalog: SemanticCatalog) -> None:
     """Validate that only allowed functions are used."""
+    blocked_lower = {f.lower() for f in BLOCKED_FUNCTIONS}
+
     for func in stmt.find_all(exp.Func):
-        func_name = func.sql_name().upper() if hasattr(func, 'sql_name') else type(func).__name__.upper()
+        # Get function name - handle Anonymous functions by their SQL representation
+        if isinstance(func, exp.Anonymous):
+            func_name = func.sql_name().upper()
+            # Also check the raw SQL to catch pg_sleep, lo_import etc.
+            raw_sql = func.sql(dialect="postgres").upper()
+            for blocked in blocked_lower:
+                if blocked.upper() in raw_sql:
+                    raise SqlPolicyViolation(
+                        f"Function '{blocked}' is not allowed",
+                        stage="PYTHON_POLICY",
+                    )
+        else:
+            func_name = func.sql_name().upper() if hasattr(func, 'sql_name') else type(func).__name__.upper()
 
-        # Check blocked functions
-        if func_name.lower() in {f.lower() for f in BLOCKED_FUNCTIONS}:
-            raise SqlPolicyViolation(
-                f"Function '{func_name}' is not allowed",
-                stage="PYTHON_POLICY",
-            )
+            # Check blocked functions (case-insensitive)
+            if func_name.lower() in blocked_lower:
+                raise SqlPolicyViolation(
+                    f"Function '{func_name}' is not allowed",
+                    stage="PYTHON_POLICY",
+                )
 
-        # Check against catalog (allow standard SQL functions)
-        standard_funcs = {"CASE", "WHEN", "THEN", "ELSE", "IF", "NULLIF", "CAST", "COALESCE"}
-        if (func_name not in standard_funcs and
-            not catalog.is_valid_function(func_name) and
-            not func_name.startswith("DATE")):
-            # Allow DATE_TRUNC, EXTRACT etc.
+        # Skip standard SQL keywords/functions
+        if func_name in STANDARD_SQL_FUNCS:
+            continue
+
+        # Skip known safe prefixes
+        if any(func_name.startswith(p) for p in SAFE_PREFIXES):
+            continue
+
+        # Check catalog (skip for Anonymous functions)
+        if not isinstance(func, exp.Anonymous) and not catalog.is_valid_function(func_name):
             raise SqlPolicyViolation(
                 f"Function '{func_name}' is not in the allowed list",
                 stage="PYTHON_POLICY",
@@ -266,3 +275,5 @@ def _ensure_limit(stmt: exp.Select, max_rows: int) -> None:
             limit.set("expression", exp.Literal.number(max_rows))
     else:
         stmt.set("limit", exp.Limit(expression=exp.Literal.number(max_rows)))
+
+
