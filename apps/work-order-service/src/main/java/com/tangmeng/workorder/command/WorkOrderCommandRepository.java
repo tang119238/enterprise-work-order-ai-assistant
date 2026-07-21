@@ -40,4 +40,8 @@ public interface WorkOrderCommandRepository {
                                String errorCode, LocalDateTime now);
     boolean rejectProposal(UUID tenantId, UUID proposalId, UUID actorId, LocalDateTime now);
     boolean markProposalExpired(UUID tenantId, UUID proposalId, LocalDateTime now);
+    boolean markRectificationStarted(UUID tenantId, UUID proposalId, UUID workOrderId,
+                                     UUID actorId, LocalDateTime now);
+    int markRectificationClosed(UUID tenantId, UUID proposalId, UUID actorId,
+                                LocalDateTime now);
 }

@@ -56,6 +56,11 @@ public class SecurityConfig {
                         AuthorityAuthorizationManager.hasAuthority("SCOPE_quality:consume"),
                         AuthorityAuthorizationManager.hasAuthority("AI_SERVICE")
                     ))
+                .requestMatchers("/internal/quality-results/**")
+                    .access(AuthorizationManagers.allOf(
+                        AuthorityAuthorizationManager.hasAuthority("SCOPE_quality:callback"),
+                        AuthorityAuthorizationManager.hasAuthority("AI_SERVICE")
+                    ))
                 .requestMatchers("/api/**", "/internal/**").hasAnyAuthority(TENANT_ROLES)
                 .anyRequest().denyAll())
             .oauth2ResourceServer(resourceServer -> resourceServer

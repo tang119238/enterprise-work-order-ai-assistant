@@ -19,6 +19,7 @@ import com.tangmeng.workorder.domain.WorkOrderTransitionResult;
 import com.tangmeng.workorder.mapper.ActionProposalMapper;
 import com.tangmeng.workorder.mapper.ProjectMapper;
 import com.tangmeng.workorder.mapper.WorkOrderMapper;
+import com.tangmeng.workorder.quality.QualityResultCallback;
 import com.tangmeng.workorder.security.TenantContext;
 import com.tangmeng.workorder.service.WorkOrderNotFoundException;
 import com.tangmeng.workorder.tenant.TenantTransaction;
@@ -79,6 +80,29 @@ public class ActionProposalService {
         }
         assertKnownRoles(context);
         return transactions.required(context, () -> createInsideTransaction(context, command));
+    }
+
+    public ActionProposalResponse createQualityProposal(
+        TenantContext context,
+        WorkOrderEntity current,
+        QualityResultCallback callback
+    ) {
+        if (context == null || current == null || callback == null) {
+            throw new InvalidCommandException();
+        }
+        callback.requireValid();
+        if (!context.roles().contains(AI_SERVICE)
+            || !context.scopes().contains("quality:callback")
+            || !context.tenantId().equals(callback.tenantId())
+            || !context.tenantId().equals(current.getTenantId())
+            || !callback.workOrderId().equals(current.getId())
+            || callback.workOrderVersion() != current.getVersion()
+            || !"COMPLETED".equals(current.getStatus())
+            || "SKIP".equals(callback.verdict())) {
+            throw new ActionNotPermittedException();
+        }
+        return transactions.required(context,
+            () -> createQualityProposalInside(context, current, callback));
     }
 
     public com.tangmeng.workorder.api.WorkOrderExecutionResponse confirm(
@@ -165,6 +189,96 @@ public class ActionProposalService {
             expectedVersion,
             expiresAt
         );
+    }
+
+    private ActionProposalResponse createQualityProposalInside(
+        TenantContext context,
+        WorkOrderEntity current,
+        QualityResultCallback callback
+    ) {
+        LocalDateTime now = LocalDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+        boolean close = "PASS".equals(callback.verdict());
+        String actionType = close ? "CLOSE" : "CREATE_RECTIFICATION";
+        UUID proposalId = UUID.randomUUID();
+        ObjectNode command = objectMapper.createObjectNode();
+        command.put("quality_result_id", callback.resultId().toString());
+        command.put("inspection_round", callback.inspectionRound());
+        command.put("verdict", callback.verdict());
+        command.put("target_work_order_no", current.getWorkOrderNo());
+
+        JsonNode before = snapshot(current);
+        JsonNode after;
+        if (close) {
+            after = preview(current, new CreateProposalCommand.Close(current.getWorkOrderNo()), now);
+        } else {
+            UUID reworkId = UUID.randomUUID();
+            String rootNumber = current.getRootWorkOrderNo() == null
+                ? current.getWorkOrderNo() : current.getRootWorkOrderNo();
+            UUID rootId = current.getRootWorkOrderId() == null
+                ? current.getId() : current.getRootWorkOrderId();
+            String reason = rectificationReason(callback);
+            String title = limited("Rectification: " + current.getTitle(), 200);
+            String workOrderNo = "RW-" + callback.resultId().toString().replace("-", "").substring(0, 20);
+            LocalDateTime dueAt = now.plusDays(2);
+            command.put("id", reworkId.toString());
+            command.put("work_order_no", workOrderNo);
+            command.put("title", title);
+            command.put("description", "Quality rectification for result " + callback.resultId());
+            command.put("project_id", current.getProjectId().toString());
+            command.put("project_name", current.getProjectName());
+            command.put("space_path", current.getSpacePath());
+            command.put("order_type", "REWORK");
+            command.put("priority", "HIGH");
+            command.put("source", "AI_QUALITY");
+            command.put("root_work_order_id", rootId.toString());
+            command.put("root_work_order_no", rootNumber);
+            command.put("rework_reason", reason);
+            command.put("due_at", dueAt.toString());
+
+            ObjectNode preview = command.deepCopy();
+            preview.put("tenant_id", context.tenantId().toString());
+            preview.put("status", WorkOrderStatus.PENDING_DISPATCH.name());
+            preview.put("version", 0L);
+            preview.put("created_at", now.toString());
+            after = preview;
+        }
+
+        LocalDateTime expiresAt = now.plusHours(24);
+        ActionProposalEntity entity = ActionProposalEntity.builder()
+            .id(proposalId).tenantId(context.tenantId()).actionType(actionType)
+            .targetId(current.getId()).commandPayload(command).beforeSnapshot(before)
+            .afterSnapshot(after).riskLevel(close ? "HIGH" : "CRITICAL")
+            .status(PENDING_CONFIRMATION).requestedBy(context.userId())
+            .expectedVersion(current.getVersion()).expiresAt(expiresAt)
+            .createdAt(now).updatedAt(now).build();
+        if (proposalMapper.insert(entity) != 1) {
+            throw new IllegalStateException("Action proposal was not persisted");
+        }
+        return new ActionProposalResponse(
+            proposalId, actionType, current.getWorkOrderNo(), entity.getRiskLevel(),
+            PENDING_CONFIRMATION, before, after, current.getVersion(), expiresAt
+        );
+    }
+
+    private static String rectificationReason(QualityResultCallback callback) {
+        for (JsonNode finding : callback.findings()) {
+            JsonNode recommendation = finding.get("recommendation");
+            JsonNode label = finding.get("label");
+            if (recommendation != null && recommendation.isTextual()
+                && label != null && label.isTextual()
+                && Set.of("FAIL", "UNCERTAIN").contains(label.asText())) {
+                return limited(recommendation.asText().strip(), 300);
+            }
+        }
+        return "Review and rectify quality result " + callback.resultId();
+    }
+
+    private static String limited(String value, int maximum) {
+        if (value == null || value.isBlank()) {
+            throw new InvalidCommandException();
+        }
+        String normalized = value.strip();
+        return normalized.length() <= maximum ? normalized : normalized.substring(0, maximum);
     }
 
     private ProjectEntity loadProject(TenantContext context, CreateProposalCommand.Create create) {

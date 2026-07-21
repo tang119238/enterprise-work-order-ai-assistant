@@ -215,6 +215,28 @@ public class JdbcWorkOrderCommandRepository implements WorkOrderCommandRepositor
             """, now, tenantId, proposalId, now) == 1;
     }
 
+    @Override
+    public boolean markRectificationStarted(UUID tenantId, UUID proposalId, UUID workOrderId,
+                                            UUID actorId, LocalDateTime now) {
+        return jdbc.update("""
+            update rectification_case
+            set rectification_work_order_id=?, status='RECTIFYING', updated_by=?, updated_at=?
+            where tenant_id=? and proposal_id=? and status='PROPOSED'
+              and current_verdict in ('FAIL','UNCERTAIN')
+            """, workOrderId, actorId, now, tenantId, proposalId) == 1;
+    }
+
+    @Override
+    public int markRectificationClosed(UUID tenantId, UUID proposalId, UUID actorId,
+                                       LocalDateTime now) {
+        return jdbc.update("""
+            update rectification_case
+            set status='CLOSED', closed_at=?, updated_by=?, updated_at=?
+            where tenant_id=? and proposal_id=? and status='PROPOSED'
+              and current_verdict='PASS'
+            """, now, actorId, now, tenantId, proposalId);
+    }
+
     private JsonNode readJson(String value) {
         if (value == null) return null;
         try { return objectMapper.readTree(value); }

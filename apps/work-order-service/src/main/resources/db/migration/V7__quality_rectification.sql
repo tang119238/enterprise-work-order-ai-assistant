@@ -1,8 +1,13 @@
+ALTER TABLE action_proposal
+    ADD CONSTRAINT uq_action_proposal_tenant_id UNIQUE (tenant_id, id);
+
 CREATE TABLE rectification_case (
     id UUID NOT NULL DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
     original_work_order_id UUID NOT NULL,
     current_quality_result_id UUID NOT NULL,
+    current_verdict VARCHAR(32) NOT NULL,
+    proposal_id UUID NOT NULL,
     rectification_work_order_id UUID,
     inspection_round INTEGER NOT NULL,
     status VARCHAR(32) NOT NULL DEFAULT 'PROPOSED',
@@ -17,13 +22,22 @@ CREATE TABLE rectification_case (
         FOREIGN KEY (tenant_id, original_work_order_id) REFERENCES work_order(tenant_id, id),
     CONSTRAINT fk_rectification_case_rectification_work_order
         FOREIGN KEY (tenant_id, rectification_work_order_id) REFERENCES work_order(tenant_id, id),
+    CONSTRAINT fk_rectification_case_proposal
+        FOREIGN KEY (tenant_id, proposal_id) REFERENCES action_proposal(tenant_id, id),
     CONSTRAINT fk_rectification_case_created_by FOREIGN KEY (created_by) REFERENCES user_identity(id),
     CONSTRAINT fk_rectification_case_updated_by FOREIGN KEY (updated_by) REFERENCES user_identity(id),
     CONSTRAINT uq_rectification_case_business_key
         UNIQUE (tenant_id, original_work_order_id, inspection_round),
+    CONSTRAINT uq_rectification_case_quality_result
+        UNIQUE (tenant_id, current_quality_result_id),
+    CONSTRAINT uq_rectification_case_proposal
+        UNIQUE (tenant_id, proposal_id),
     CONSTRAINT ck_rectification_case_round CHECK (inspection_round > 0),
     CONSTRAINT ck_rectification_case_status CHECK (
         status IN ('PROPOSED', 'RECTIFYING', 'RECHECKING', 'CLOSED')
+    ),
+    CONSTRAINT ck_rectification_case_verdict CHECK (
+        current_verdict IN ('PASS', 'FAIL', 'UNCERTAIN')
     ),
     CONSTRAINT ck_rectification_case_closed_at CHECK (
         (status = 'CLOSED' AND closed_at IS NOT NULL)

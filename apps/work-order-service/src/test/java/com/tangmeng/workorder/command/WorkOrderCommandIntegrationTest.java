@@ -406,6 +406,53 @@ class WorkOrderCommandIntegrationTest {
     }
 
     @Test
+    void confirmedRectificationProposalCreatesOneLinkedReworkWithoutMutatingOriginal() throws Exception {
+        UUID reworkId = UUID.fromString("00000000-0000-0000-0000-000000009501");
+        when(access.loadCurrentRoles(TENANT, "human")).thenReturn(Set.of("QUALITY_REVIEWER"));
+        ObjectNode command = (ObjectNode) mapper.readTree("""
+            {
+              "id":"00000000-0000-0000-0000-000000009501",
+              "work_order_no":"RW-44444444444444444444",
+              "title":"Rectification: old",
+              "description":"Quality rectification",
+              "priority":"HIGH",
+              "root_work_order_id":"00000000-0000-0000-0000-000000000001",
+              "root_work_order_no":"WO-1",
+              "rework_reason":"Attach evidence",
+              "due_at":"2026-07-20T10:00:00",
+              "quality_result_id":"44444444-4444-4444-4444-444444444444"
+            }
+            """);
+        ActionProposalEntity proposal = proposal("CREATE_RECTIFICATION", command);
+        proposal.setAfterSnapshot(mapper.createObjectNode().put("id", reworkId.toString()));
+        WorkOrderEntity original = order("COMPLETED");
+        when(repository.findProposal(TENANT, PROPOSAL)).thenReturn(proposal);
+        when(repository.findWorkOrder(TENANT, TARGET, Set.of(PROJECT))).thenReturn(original);
+        when(repository.insertWorkOrder(any()))
+            .thenReturn(WorkOrderCommandRepository.InsertWorkOrderResult.INSERTED);
+        when(repository.markRectificationStarted(TENANT, PROPOSAL, reworkId, USER, NOW))
+            .thenReturn(true);
+
+        WorkOrderExecutionResponse response = service.execute(
+            context("QUALITY_REVIEWER"), proposal, "key");
+
+        assertThat(response.actionType()).isEqualTo("CREATE_RECTIFICATION");
+        assertThat(response.workOrderId()).isEqualTo(reworkId);
+        assertThat(response.status()).isEqualTo("PENDING_DISPATCH");
+        assertThat(response.version()).isZero();
+        ArgumentCaptor<WorkOrderEntity> inserted = ArgumentCaptor.forClass(WorkOrderEntity.class);
+        verify(repository).insertWorkOrder(inserted.capture());
+        assertThat(inserted.getValue().getOrderType()).isEqualTo("REWORK");
+        assertThat(inserted.getValue().getRootWorkOrderId()).isEqualTo(TARGET);
+        assertThat(inserted.getValue().getRootWorkOrderNo()).isEqualTo("WO-1");
+        assertThat(inserted.getValue().getReworkReason()).isEqualTo("Attach evidence");
+        verify(repository, never()).updateWorkOrder(any(), any(Long.class));
+        verify(repository).markRectificationStarted(TENANT, PROPOSAL, reworkId, USER, NOW);
+        verify(repository).insertOutbox(
+            eq(TENANT), eq(reworkId), eq("WORK_ORDER_CREATED"), any(), eq(NOW));
+    }
+
+    @Test
     void duplicateCreateReturnsConflictFromFreshDatabaseRowButOtherIntegrityFailuresAreInvalid() throws Exception {
         ObjectNode command = (ObjectNode) mapper.readTree("""
             {"work_order_no":"WO-DUP","title":"new","description":"d",

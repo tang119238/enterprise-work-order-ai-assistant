@@ -13,7 +13,7 @@ class QualitySchemaIntegrationTest {
     @Test
     void migrationDefinesTenantOwnedRectificationAndAppendOnlyReviewSchema() throws IOException {
         ClassPathResource migration = new ClassPathResource(
-            "db/migration/V6__quality_rectification.sql"
+            "db/migration/V7__quality_rectification.sql"
         );
 
         assertThat(migration.exists()).isTrue();
@@ -25,6 +25,8 @@ class QualitySchemaIntegrationTest {
             "original_work_order_id UUID NOT NULL",
             "rectification_work_order_id UUID",
             "current_quality_result_id UUID NOT NULL",
+            "current_verdict VARCHAR(32) NOT NULL",
+            "proposal_id UUID NOT NULL",
             "inspection_round INTEGER NOT NULL",
             "status IN ('PROPOSED', 'RECTIFYING', 'RECHECKING', 'CLOSED')",
             "review_payload JSONB NOT NULL",
@@ -32,6 +34,8 @@ class QualitySchemaIntegrationTest {
             "FOREIGN KEY (tenant_id, original_work_order_id) REFERENCES work_order(tenant_id, id)",
             "FOREIGN KEY (tenant_id, rectification_work_order_id) REFERENCES work_order(tenant_id, id)",
             "UNIQUE (tenant_id, original_work_order_id, inspection_round)",
+            "UNIQUE (tenant_id, current_quality_result_id)",
+            "FOREIGN KEY (tenant_id, proposal_id) REFERENCES action_proposal(tenant_id, id)",
             "CREATE INDEX idx_rectification_case_tenant_status",
             "CREATE INDEX idx_quality_review_event_tenant_case_created_at"
         );
@@ -41,7 +45,7 @@ class QualitySchemaIntegrationTest {
     @Test
     void migrationForcesRlsAndSeparatesJavaOwnershipFromAiRole() throws IOException {
         String sql = new ClassPathResource(
-            "db/migration/V6__quality_rectification.sql"
+            "db/migration/V7__quality_rectification.sql"
         ).getContentAsString(StandardCharsets.UTF_8);
 
         for (String table : new String[]{"rectification_case", "quality_review_event"}) {

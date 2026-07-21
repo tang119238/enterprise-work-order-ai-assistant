@@ -150,11 +150,18 @@ public class WorkOrderCommandService {
             }
         }
 
+        boolean createsOrder = Set.of("CREATE", "CREATE_RECTIFICATION")
+            .contains(proposal.getActionType());
         JsonNode before = current == null ? NullNode.getInstance() : snapshot(current);
-        WorkOrderEntity changed = current == null
-            ? createOrder(context, proposal, project, now)
-            : apply(context, current, proposal, now);
-        if (current == null) {
+        WorkOrderEntity changed;
+        if ("CREATE".equals(proposal.getActionType())) {
+            changed = createOrder(context, proposal, project, now);
+        } else if ("CREATE_RECTIFICATION".equals(proposal.getActionType())) {
+            changed = createRectificationOrder(context, proposal, current, now);
+        } else {
+            changed = apply(context, current, proposal, now);
+        }
+        if (createsOrder) {
             WorkOrderCommandRepository.InsertWorkOrderResult result = repository.insertWorkOrder(changed);
             if (result == WorkOrderCommandRepository.InsertWorkOrderResult.DUPLICATE) {
                 WorkOrderEntity duplicate = repository.findWorkOrderByIdentity(
@@ -172,7 +179,8 @@ public class WorkOrderCommandService {
             throw new WorkOrderVersionConflictException(freshConflictPreview(context, fresh, proposal, now));
         }
 
-        if (current != null && !Objects.equals(current.getAssigneeId(), changed.getAssigneeId())) {
+        if (!createsOrder && current != null
+            && !Objects.equals(current.getAssigneeId(), changed.getAssigneeId())) {
             int closed = repository.closeOpenAssignment(context.tenantId(), changed.getId(), now);
             int expectedClosed = current.getAssigneeId() == null ? 0 : 1;
             if (closed != expectedClosed) throw new InvalidCommandException();
@@ -191,6 +199,7 @@ public class WorkOrderCommandService {
             case "START" -> "WORK_ORDER_STARTED";
             case "COMPLETE" -> "WORK_ORDER_COMPLETED";
             case "CLOSE" -> "WORK_ORDER_CLOSED";
+            case "CREATE_RECTIFICATION" -> "WORK_ORDER_CREATED";
             case "CANCEL" -> "WORK_ORDER_CANCELLED";
             default -> throw new InvalidCommandException();
         };
@@ -209,6 +218,18 @@ public class WorkOrderCommandService {
         requireOne(repository.insertOutbox(
             context.tenantId(), changed.getId(), eventType, outboxPayload, now
         ));
+
+        if ("CREATE_RECTIFICATION".equals(proposal.getActionType())
+            && !repository.markRectificationStarted(
+                context.tenantId(), proposalId, changed.getId(), context.userId(), now)) {
+            throw new InvalidCommandException();
+        }
+        if ("CLOSE".equals(proposal.getActionType())
+            && proposal.getCommandPayload().hasNonNull("quality_result_id")
+            && repository.markRectificationClosed(
+                context.tenantId(), proposalId, context.userId(), now) != 1) {
+            throw new InvalidCommandException();
+        }
 
         WorkOrderExecutionResponse response = new WorkOrderExecutionResponse(
             proposalId, changed.getId(), changed.getWorkOrderNo(), proposal.getActionType(),
@@ -242,7 +263,7 @@ public class WorkOrderCommandService {
         String required = switch (proposal.getActionType()) {
             case "CREATE", "ASSIGN", "UPDATE", "CANCEL" -> ActionProposalService.DISPATCHER;
             case "ACCEPT", "START", "COMPLETE" -> ActionProposalService.OPERATOR;
-            case "CLOSE" -> ActionProposalService.QUALITY_REVIEWER;
+            case "CLOSE", "CREATE_RECTIFICATION" -> ActionProposalService.QUALITY_REVIEWER;
             default -> throw new InvalidCommandException();
         };
         if (!roles.contains(required)) throw new ActionNotPermittedException();
@@ -300,6 +321,40 @@ public class WorkOrderCommandService {
             .source(text(command, "source")).version(0L).createdBy(context.userId())
             .updatedBy(context.userId()).createdAt(now)
             .dueAt(requiredDateTime(command, "due_at", "dueAt")).build();
+    }
+
+    private WorkOrderEntity createRectificationOrder(
+        TenantContext context,
+        ActionProposalEntity proposal,
+        WorkOrderEntity original,
+        LocalDateTime now
+    ) {
+        if (original == null || !"COMPLETED".equals(original.getStatus())) {
+            throw new InvalidCommandException();
+        }
+        JsonNode command = proposal.getCommandPayload();
+        return WorkOrderEntity.builder()
+            .id(requiredUuid(command, "id"))
+            .tenantId(context.tenantId())
+            .workOrderNo(text(command, "work_order_no"))
+            .title(text(command, "title"))
+            .description(text(command, "description"))
+            .projectId(original.getProjectId())
+            .projectName(original.getProjectName())
+            .spacePath(original.getSpacePath())
+            .orderType("REWORK")
+            .priority(text(command, "priority"))
+            .status(WorkOrderStatus.PENDING_DISPATCH.name())
+            .source("AI_QUALITY")
+            .rootWorkOrderId(requiredUuid(command, "root_work_order_id"))
+            .rootWorkOrderNo(text(command, "root_work_order_no"))
+            .reworkReason(text(command, "rework_reason"))
+            .version(0L)
+            .createdBy(context.userId())
+            .updatedBy(context.userId())
+            .createdAt(now)
+            .dueAt(requiredDateTime(command, "due_at"))
+            .build();
     }
 
     private WorkOrderEntity apply(TenantContext context, WorkOrderEntity current,
