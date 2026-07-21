@@ -15,6 +15,7 @@ class AgentState(TypedDict, total=False):
     work_orders: list[WorkOrderRecord]
     tool_calls: list[ToolCallRecord]
     warnings: list[str]
+    friendly_error: str
     citations: list[Citation]
     answer: str
     model_result: LLMResult
